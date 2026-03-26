@@ -26,6 +26,7 @@ import { logger } from './logger.js';
 import { spawnBox } from './box-runtime.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
+import { copyDirRecursive } from './utils.js';
 
 // Lazy OneCLI — dynamically imported so it's not a hard dependency
 let _onecli: any = null;
@@ -176,7 +177,7 @@ function buildVolumeMounts(
       const srcDir = path.join(skillsSrc, skillDir);
       if (!fs.statSync(srcDir).isDirectory()) continue;
       const dstDir = path.join(skillsDst, skillDir);
-      fs.cpSync(srcDir, dstDir, { recursive: true });
+      copyDirRecursive(srcDir, dstDir);
     }
   }
   mounts.push({
@@ -213,7 +214,7 @@ function buildVolumeMounts(
     'agent-runner-src',
   );
   if (!fs.existsSync(groupAgentRunnerDir) && fs.existsSync(agentRunnerSrc)) {
-    fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
+    copyDirRecursive(agentRunnerSrc, groupAgentRunnerDir);
   }
   mounts.push({
     hostPath: groupAgentRunnerDir,
