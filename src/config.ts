@@ -173,4 +173,3 @@ export function setProjectRoot(dir: string): void {
 export function setAssistantName(name: string): void {
   applyConfig({ name });
 }
-
