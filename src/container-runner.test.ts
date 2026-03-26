@@ -146,16 +146,15 @@ function createMockExecution() {
 
 let mockExec: ReturnType<typeof createMockExecution>;
 const mockBox = {
-  exec: vi.fn(),
   stop: vi.fn().mockResolvedValue(undefined),
 };
-const mockRuntime = {
-  create: vi.fn().mockResolvedValue(mockBox),
-};
+
+const mockSpawnBox = vi.fn();
 
 vi.mock('./box-runtime.js', () => ({
-  getRuntime: () => mockRuntime,
+  getRuntime: () => ({}),
   stopBox: vi.fn().mockResolvedValue(undefined),
+  spawnBox: (...args: any[]) => mockSpawnBox(...args),
 }));
 
 import { runContainerAgent, ContainerOutput } from './container-runner.js';
@@ -187,8 +186,10 @@ describe('container-runner with BoxLite', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     mockExec = createMockExecution();
-    mockBox.exec.mockResolvedValue(mockExec.execution);
-    mockRuntime.create.mockResolvedValue(mockBox);
+    mockSpawnBox.mockResolvedValue({
+      box: mockBox,
+      execution: mockExec.execution,
+    });
   });
 
   afterEach(() => {

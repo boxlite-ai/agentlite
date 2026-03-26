@@ -23,7 +23,7 @@ import {
 } from './config.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
-import { getRuntime } from './box-runtime.js';
+import { spawnBox } from './box-runtime.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
 
@@ -73,7 +73,7 @@ export interface ContainerOutput {
   error?: string;
 }
 
-interface VolumeMount {
+export interface VolumeMount {
   hostPath: string;
   containerPath: string;
   readonly: boolean;
@@ -277,13 +277,6 @@ async function extractOnecliEnv(
   return env;
 }
 
-// Entrypoint command that runs inside the box (same as old Dockerfile entrypoint)
-const ENTRYPOINT_CMD =
-  'cd /app && npx tsc --outDir /tmp/dist 2>&1 >&2 && ' +
-  'ln -s /app/node_modules /tmp/dist/node_modules && ' +
-  'chmod -R a-w /tmp/dist && ' +
-  'node /tmp/dist/index.js';
-
 export async function runContainerAgent(
   group: RegisteredGroup,
   input: ContainerInput,
@@ -327,10 +320,19 @@ export async function runContainerAgent(
     boxEnv['HOME'] = '/home/node';
   }
 
+  const boxOptions = {
+    image: BOX_IMAGE,
+    rootfsPath: BOX_ROOTFS_PATH || undefined,
+    memoryMib: BOX_MEMORY_MIB,
+    cpus: BOX_CPUS,
+    user: userStr,
+  };
+
   logger.debug(
     {
       group: group.name,
       containerName,
+      boxOptions,
       mounts: mounts.map(
         (m) =>
           `${m.hostPath} -> ${m.containerPath}${m.readonly ? ' (ro)' : ''}`,
@@ -352,112 +354,19 @@ export async function runContainerAgent(
   const logsDir = path.join(groupDir, 'logs');
   fs.mkdirSync(logsDir, { recursive: true });
 
-  // Create box via BoxLite runtime
-  const runtime = getRuntime();
-  const envArray = Object.entries(boxEnv).map(([key, value]) => ({
-    key,
-    value,
-  }));
-
-  let box;
-  try {
-    // Use local OCI layout if available (from container/build.sh), else pull from registry.
-    // Check for oci-layout file to distinguish a valid OCI directory from an empty one.
-    const useLocalRootfs =
-      BOX_ROOTFS_PATH &&
-      fs.existsSync(path.join(BOX_ROOTFS_PATH, 'oci-layout'));
-    box = await runtime.create(
-      {
-        image: useLocalRootfs ? undefined : BOX_IMAGE,
-        rootfsPath: useLocalRootfs ? BOX_ROOTFS_PATH : undefined,
-        autoRemove: true,
-        memoryMib: BOX_MEMORY_MIB,
-        cpus: BOX_CPUS,
-        volumes: mounts.map((m) => ({
-          hostPath: m.hostPath,
-          guestPath: m.containerPath,
-          readOnly: m.readonly,
-        })),
-        env: envArray,
-        workingDir: '/workspace/group',
-        user: userStr,
-      },
-      containerName,
-    );
-  } catch (err) {
-    logger.error(
-      { group: group.name, containerName, error: err },
-      'Box creation failed',
-    );
-    return {
-      status: 'error',
-      result: null,
-      error: `Box creation failed: ${err instanceof Error ? err.message : String(err)}`,
-    };
-  }
+  // Create box, run entrypoint, write stdin
+  const spawnResult = await spawnBox(
+    group.name,
+    containerName,
+    mounts,
+    boxEnv,
+    userStr,
+    JSON.stringify(input),
+  );
+  if ('status' in spawnResult) return spawnResult; // error
+  const { box, execution } = spawnResult;
 
   onProcess(containerName, containerName);
-
-  // Start the agent entrypoint via box.exec (returns JsExecution with streaming)
-  let execution;
-  try {
-    const timeoutSecs = Math.max(
-      Math.floor(CONTAINER_TIMEOUT / 1000),
-      Math.floor((IDLE_TIMEOUT + 30_000) / 1000),
-    );
-
-    execution = await box.exec(
-      'bash',
-      ['-c', ENTRYPOINT_CMD],
-      null, // env already set on box creation
-      false, // tty
-      null, // user already set on box creation
-      timeoutSecs,
-      '/workspace/group',
-    );
-  } catch (err) {
-    logger.error(
-      { group: group.name, containerName, error: err },
-      'Failed to start agent in box',
-    );
-    try {
-      await box.stop();
-    } catch {
-      /* ignore */
-    }
-    return {
-      status: 'error',
-      result: null,
-      error: `Failed to start agent: ${err instanceof Error ? err.message : String(err)}`,
-    };
-  }
-
-  // Write input via stdin (same protocol as Docker's container.stdin.write)
-  try {
-    const stdin = await execution.stdin();
-    await stdin.writeString(JSON.stringify(input));
-    await stdin.close();
-  } catch (err) {
-    logger.error(
-      { group: group.name, containerName, error: err },
-      'Failed to write stdin to box',
-    );
-    try {
-      await execution.kill();
-    } catch {
-      /* ignore */
-    }
-    try {
-      await box.stop();
-    } catch {
-      /* ignore */
-    }
-    return {
-      status: 'error',
-      result: null,
-      error: `Failed to write stdin: ${err instanceof Error ? err.message : String(err)}`,
-    };
-  }
 
   // Stream stdout and stderr, parse output markers
   let parseBuffer = '';
@@ -660,6 +569,9 @@ export async function runContainerAgent(
   const isError = code !== 0;
 
   if (isVerbose || isError) {
+    // On error, log input metadata only — not the full prompt.
+    // Full input is only included at verbose level to avoid
+    // persisting user conversation content on every non-zero exit.
     if (isVerbose) {
       logLines.push(`=== Input ===`, JSON.stringify(input, null, 2), ``);
     } else {
@@ -671,6 +583,9 @@ export async function runContainerAgent(
       );
     }
     logLines.push(
+      `=== Box Options ===`,
+      JSON.stringify(boxOptions, null, 2),
+      ``,
       `=== Mounts ===`,
       mounts
         .map(
@@ -704,9 +619,17 @@ export async function runContainerAgent(
 
   if (code !== 0) {
     logger.error(
-      { group: group.name, code, duration, stderr, stdout, logFile },
+      { 
+        group: group.name, 
+        code, 
+        duration, 
+        stderr, 
+        stdout, 
+        logFile,
+      },
       'Box exited with error',
     );
+
     return {
       status: 'error',
       result: null,
@@ -714,7 +637,7 @@ export async function runContainerAgent(
     };
   }
 
-  // Streaming mode: wait for output chain to settle
+  // Streaming mode: wait for output chain to settle, return completion marker
   if (onOutput) {
     await outputChain;
     logger.info(
@@ -726,6 +649,7 @@ export async function runContainerAgent(
 
   // Legacy mode: parse the last output marker pair from accumulated stdout
   try {
+    // Extract JSON between sentinel markers for robust parsing
     const startIdx = stdout.indexOf(OUTPUT_START_MARKER);
     const endIdx = stdout.indexOf(OUTPUT_END_MARKER);
 
@@ -735,11 +659,13 @@ export async function runContainerAgent(
         .slice(startIdx + OUTPUT_START_MARKER.length, endIdx)
         .trim();
     } else {
+      // Fallback: last non-empty line (backwards compatibility)
       const lines = stdout.trim().split('\n');
       jsonLine = lines[lines.length - 1];
     }
 
     const output: ContainerOutput = JSON.parse(jsonLine);
+
     logger.info(
       {
         group: group.name,
@@ -749,6 +675,7 @@ export async function runContainerAgent(
       },
       'Box completed',
     );
+
     return output;
   } catch (err) {
     logger.error(

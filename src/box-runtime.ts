@@ -4,8 +4,19 @@
  * Replaces the previous container-runtime.ts (Docker-based).
  */
 
+import fs from 'fs';
+import path from 'path';
+
 import { JsBoxlite } from '@boxlite-ai/boxlite';
 
+import {
+  BOX_IMAGE,
+  BOX_ROOTFS_PATH,
+  BOX_MEMORY_MIB,
+  BOX_CPUS,
+  CONTAINER_TIMEOUT,
+  IDLE_TIMEOUT,
+} from './config.js';
 import { logger } from './logger.js';
 
 type BoxliteRuntime = InstanceType<typeof JsBoxlite>;
@@ -100,4 +111,143 @@ export async function stopBox(name: string): Promise<void> {
   } catch {
     /* already stopped or doesn't exist */
   }
+}
+
+// --- Box spawning (extracted from container-runner) ---
+
+export interface SpawnVolumeMount {
+  hostPath: string;
+  containerPath: string;
+  readonly: boolean;
+}
+
+export interface SpawnResult {
+  box: any;
+  execution: any;
+}
+
+interface SpawnErrorResult {
+  status: 'error';
+  result: null;
+  error: string;
+}
+
+/**
+ * Create a BoxLite VM, run the image entrypoint, and write input via stdin.
+ * Returns the box + execution handles on success, or an error result.
+ */
+export async function spawnBox(
+  groupName: string,
+  containerName: string,
+  mounts: SpawnVolumeMount[],
+  boxEnv: Record<string, string>,
+  userStr: string | undefined,
+  stdinData: string,
+): Promise<SpawnResult | SpawnErrorResult> {
+  const runtime = getRuntime();
+  const envArray = Object.entries(boxEnv).map(([key, value]) => ({
+    key,
+    value,
+  }));
+
+  let box;
+  try {
+    // Use local OCI layout if available (from container/build.sh), else pull from registry.
+    // Check for oci-layout file to distinguish a valid OCI directory from an empty one.
+    const useLocalRootfs =
+      BOX_ROOTFS_PATH &&
+      fs.existsSync(path.join(BOX_ROOTFS_PATH, 'oci-layout'));
+    box = await runtime.create(
+      {
+        image: useLocalRootfs ? undefined : BOX_IMAGE,
+        rootfsPath: useLocalRootfs ? BOX_ROOTFS_PATH : undefined,
+        autoRemove: true,
+        memoryMib: BOX_MEMORY_MIB,
+        cpus: BOX_CPUS,
+        volumes: mounts.map((m) => ({
+          hostPath: m.hostPath,
+          guestPath: m.containerPath,
+          readOnly: m.readonly,
+        })),
+        env: envArray,
+        workingDir: '/workspace/group',
+        user: userStr,
+      },
+      containerName,
+    );
+  } catch (err) {
+    logger.error(
+      { group: groupName, containerName, error: err },
+      'Box creation failed',
+    );
+    return {
+      status: 'error',
+      result: null,
+      error: `Box creation failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+
+  // Run the image's /app/entrypoint.sh via box.exec — box.exec doesn't honor
+  // the OCI ENTRYPOINT, so we invoke it explicitly.
+  let execution;
+  try {
+    const timeoutSecs = Math.max(
+      Math.floor(CONTAINER_TIMEOUT / 1000),
+      Math.floor((IDLE_TIMEOUT + 30_000) / 1000),
+    );
+
+    execution = await box.exec(
+      '/app/entrypoint.sh',
+      [],
+      null, // env already set on box creation
+      false, // tty
+      null, // user already set on box creation
+      timeoutSecs,
+      '/workspace/group',
+    );
+  } catch (err) {
+    logger.error(
+      { group: groupName, containerName, error: err },
+      'Failed to start agent in box',
+    );
+    try {
+      await box.stop();
+    } catch {
+      /* ignore */
+    }
+    return {
+      status: 'error',
+      result: null,
+      error: `Failed to start agent: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+
+  // Write input via stdin (same protocol as Docker's container.stdin.write)
+  try {
+    const stdin = await execution.stdin();
+    await stdin.writeString(stdinData);
+    await stdin.close();
+  } catch (err) {
+    logger.error(
+      { group: groupName, containerName, error: err },
+      'Failed to write stdin to box',
+    );
+    try {
+      await execution.kill();
+    } catch {
+      /* ignore */
+    }
+    try {
+      await box.stop();
+    } catch {
+      /* ignore */
+    }
+    return {
+      status: 'error',
+      result: null,
+      error: `Failed to write stdin: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+
+  return { box, execution };
 }
