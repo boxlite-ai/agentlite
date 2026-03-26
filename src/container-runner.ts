@@ -755,11 +755,11 @@ export async function runContainerAgent(
     return output;
   } catch (err) {
     logger.error(
-      { 
-        group: group.name, 
-        stdout, 
-        stderr, 
-        error: err, 
+      {
+        group: group.name,
+        stdout,
+        stderr,
+        error: err,
       },
       'Failed to parse box output',
     );
