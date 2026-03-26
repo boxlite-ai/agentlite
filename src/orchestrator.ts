@@ -19,7 +19,11 @@ import {
   writeGroupsSnapshot,
   writeTasksSnapshot,
 } from './container-runner.js';
-import { cleanupOrphans, ensureRuntimeReady, setBoxliteHome } from './box-runtime.js';
+import {
+  cleanupOrphans,
+  ensureRuntimeReady,
+  setBoxliteHome,
+} from './box-runtime.js';
 import {
   getAllChats,
   getAllRegisteredGroups,
@@ -366,7 +370,10 @@ function copyGroupTemplates(): void {
     if (fs.existsSync(src) && !fs.existsSync(dst)) {
       fs.mkdirSync(path.dirname(dst), { recursive: true });
       const content = fs.readFileSync(src, 'utf-8');
-      fs.writeFileSync(dst, content.replaceAll('{{ASSISTANT_NAME}}', ASSISTANT_NAME));
+      fs.writeFileSync(
+        dst,
+        content.replaceAll('{{ASSISTANT_NAME}}', ASSISTANT_NAME),
+      );
     }
   }
 }

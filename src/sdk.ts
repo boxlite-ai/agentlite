@@ -31,7 +31,11 @@ import {
 import { Channel, RegisteredGroup } from './types.js';
 
 // Type-only re-exports (zero runtime cost — erased at compile time)
-export type { AgentLiteOptions, ContainerOptions, SecurityOptions } from './config.js';
+export type {
+  AgentLiteOptions,
+  ContainerOptions,
+  SecurityOptions,
+} from './config.js';
 export type { Channel, RegisteredGroup, NewMessage } from './types.js';
 export type { ContainerOutput } from './container-runner.js';
 

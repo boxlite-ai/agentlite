@@ -139,7 +139,9 @@ function resolveTimezone(tz?: string): string {
   try {
     const sys = Intl.DateTimeFormat().resolvedOptions().timeZone;
     if (sys && isValidTimezone(sys)) return sys;
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
   return 'UTC';
 }
 
@@ -186,8 +188,10 @@ export function applyConfig(opts: AgentLiteOptions): void {
     if (c.memoryMib !== undefined) BOX_MEMORY_MIB = c.memoryMib;
     if (c.cpus !== undefined) BOX_CPUS = c.cpus;
     if (c.timeout !== undefined) CONTAINER_TIMEOUT = c.timeout;
-    if (c.maxOutputSize !== undefined) CONTAINER_MAX_OUTPUT_SIZE = c.maxOutputSize;
-    if (c.maxConcurrent !== undefined) MAX_CONCURRENT_CONTAINERS = Math.max(1, c.maxConcurrent);
+    if (c.maxOutputSize !== undefined)
+      CONTAINER_MAX_OUTPUT_SIZE = c.maxOutputSize;
+    if (c.maxConcurrent !== undefined)
+      MAX_CONCURRENT_CONTAINERS = Math.max(1, c.maxConcurrent);
     if (c.idleTimeout !== undefined) IDLE_TIMEOUT = c.idleTimeout;
   }
 

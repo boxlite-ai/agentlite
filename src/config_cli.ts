@@ -19,22 +19,26 @@ let envConfig: Record<string, string> = {};
 /** Load .env config values. Called by CLI before constructing AgentLite.
  *  SDK mode skips this — consumers set config explicitly. */
 export function loadEnvConfig(): void {
-  envConfig = readEnvFile(
-    ['ASSISTANT_NAME', 'ASSISTANT_HAS_OWN_NUMBER', 'ONECLI_URL', 'TZ'],
-  );
+  envConfig = readEnvFile([
+    'ASSISTANT_NAME',
+    'ASSISTANT_HAS_OWN_NUMBER',
+    'ONECLI_URL',
+    'TZ',
+  ]);
   // Re-derive values that depend on envConfig
   if (!_assistantNameOverridden) {
-    ASSISTANT_NAME = process.env.ASSISTANT_NAME || envConfig.ASSISTANT_NAME || 'Andy';
+    ASSISTANT_NAME =
+      process.env.ASSISTANT_NAME || envConfig.ASSISTANT_NAME || 'Andy';
     TRIGGER_PATTERN = new RegExp(`^@${escapeRegex(ASSISTANT_NAME)}\\b`, 'i');
   }
-  ONECLI_URL = process.env.ONECLI_URL || envConfig.ONECLI_URL || 'http://localhost:10254';
+  ONECLI_URL =
+    process.env.ONECLI_URL || envConfig.ONECLI_URL || 'http://localhost:10254';
   TIMEZONE = resolveConfigTimezone();
 }
 
-export let ASSISTANT_NAME =
-  process.env.ASSISTANT_NAME || 'Andy';
+export let ASSISTANT_NAME = process.env.ASSISTANT_NAME || 'Andy';
 export const ASSISTANT_HAS_OWN_NUMBER =
-  (process.env.ASSISTANT_HAS_OWN_NUMBER) === 'true';
+  process.env.ASSISTANT_HAS_OWN_NUMBER === 'true';
 export const POLL_INTERVAL = 2000;
 export const SCHEDULER_POLL_INTERVAL = 60000;
 
@@ -96,11 +100,9 @@ export const BOX_IMAGE =
   process.env.BOX_IMAGE || 'ghcr.io/boxlite-ai/agentlite-agent:latest';
 // Path to OCI layout directory exported by container/build.sh.
 // When set, BoxLite uses this local rootfs instead of pulling from a registry.
-export let BOX_ROOTFS_PATH = process.env.BOX_ROOTFS_PATH || path.join(
-  ASSETS_ROOT,
-  'container',
-  'oci-image',
-);
+export let BOX_ROOTFS_PATH =
+  process.env.BOX_ROOTFS_PATH ||
+  path.join(ASSETS_ROOT, 'container', 'oci-image');
 export const BOX_MEMORY_MIB = parseInt(
   process.env.BOX_MEMORY_MIB || '2048',
   10,
@@ -114,8 +116,7 @@ export const CONTAINER_MAX_OUTPUT_SIZE = parseInt(
   process.env.CONTAINER_MAX_OUTPUT_SIZE || '10485760',
   10,
 ); // 10MB default
-export let ONECLI_URL =
-  process.env.ONECLI_URL || 'http://localhost:10254';
+export let ONECLI_URL = process.env.ONECLI_URL || 'http://localhost:10254';
 export const IPC_POLL_INTERVAL = 1000;
 export const IDLE_TIMEOUT = parseInt(process.env.IDLE_TIMEOUT || '1800000', 10); // 30min default — how long to keep container alive after last result
 export const MAX_CONCURRENT_CONTAINERS = Math.max(

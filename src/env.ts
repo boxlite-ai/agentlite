@@ -8,7 +8,10 @@ import { logger } from './logger.js';
  * do with the values. This keeps secrets out of the process environment
  * so they don't leak to child processes.
  */
-export function readEnvFile(keys: string[], baseDir?: string): Record<string, string> {
+export function readEnvFile(
+  keys: string[],
+  baseDir?: string,
+): Record<string, string> {
   const envFile = path.join(baseDir ?? process.cwd(), '.env');
   let content: string;
   try {

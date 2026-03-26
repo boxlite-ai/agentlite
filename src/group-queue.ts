@@ -126,11 +126,7 @@ export class GroupQueue {
     );
   }
 
-  registerBox(
-    groupJid: string,
-    boxName: string,
-    groupFolder?: string,
-  ): void {
+  registerBox(groupJid: string, boxName: string, groupFolder?: string): void {
     const state = this.getGroup(groupJid);
     state.boxName = boxName;
     if (groupFolder) state.groupFolder = groupFolder;

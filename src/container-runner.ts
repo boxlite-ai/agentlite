@@ -14,7 +14,13 @@ import {
   ONECLI_URL,
   TIMEZONE,
 } from './config.js';
-import { BOX_IMAGE, BOX_ROOTFS_PATH, BOX_MEMORY_MIB, BOX_CPUS, getAssetsRoot } from './config.js';
+import {
+  BOX_IMAGE,
+  BOX_ROOTFS_PATH,
+  BOX_MEMORY_MIB,
+  BOX_CPUS,
+  getAssetsRoot,
+} from './config.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
 import { getRuntime } from './box-runtime.js';
@@ -40,9 +46,7 @@ type CredentialResolver = () => Promise<Record<string, string>>;
 let _credentialResolver: CredentialResolver | null = null;
 
 /** Configure LLM options. Called by orchestrator during start(). */
-export function setLLMOptions(llm: {
-  credentials?: CredentialResolver;
-}): void {
+export function setLLMOptions(llm: { credentials?: CredentialResolver }): void {
   _credentialResolver = llm.credentials ?? null;
 }
 
@@ -356,7 +360,8 @@ export async function runContainerAgent(
   try {
     // Use local OCI layout if available (from container/build.sh), else pull from registry.
     // Check for oci-layout file to distinguish a valid OCI directory from an empty one.
-    const useLocalRootfs = BOX_ROOTFS_PATH &&
+    const useLocalRootfs =
+      BOX_ROOTFS_PATH &&
       fs.existsSync(path.join(BOX_ROOTFS_PATH, 'oci-layout'));
     box = await runtime.create(
       {
@@ -412,7 +417,11 @@ export async function runContainerAgent(
       { group: group.name, containerName, error: err },
       'Failed to start agent in box',
     );
-    try { await box.stop(); } catch { /* ignore */ }
+    try {
+      await box.stop();
+    } catch {
+      /* ignore */
+    }
     return {
       status: 'error',
       result: null,
@@ -430,8 +439,16 @@ export async function runContainerAgent(
       { group: group.name, containerName, error: err },
       'Failed to write stdin to box',
     );
-    try { await execution.kill(); } catch { /* ignore */ }
-    try { await box.stop(); } catch { /* ignore */ }
+    try {
+      await execution.kill();
+    } catch {
+      /* ignore */
+    }
+    try {
+      await box.stop();
+    } catch {
+      /* ignore */
+    }
     return {
       status: 'error',
       result: null,
@@ -457,12 +474,17 @@ export async function runContainerAgent(
   let timeoutHandle: ReturnType<typeof setTimeout>;
   const killOnTimeout = async () => {
     timedOut = true;
-    logger.error(
-      { group: group.name, containerName },
-      'Box timeout, stopping',
-    );
-    try { await execution.kill(); } catch { /* ignore */ }
-    try { await box.stop(); } catch { /* ignore */ }
+    logger.error({ group: group.name, containerName }, 'Box timeout, stopping');
+    try {
+      await execution.kill();
+    } catch {
+      /* ignore */
+    }
+    try {
+      await box.stop();
+    } catch {
+      /* ignore */
+    }
   };
   timeoutHandle = setTimeout(killOnTimeout, timeoutMs);
 
@@ -498,18 +520,14 @@ export async function runContainerAgent(
         if (onOutput) {
           parseBuffer += line;
           let startIdx: number;
-          while (
-            (startIdx = parseBuffer.indexOf(OUTPUT_START_MARKER)) !== -1
-          ) {
+          while ((startIdx = parseBuffer.indexOf(OUTPUT_START_MARKER)) !== -1) {
             const endIdx = parseBuffer.indexOf(OUTPUT_END_MARKER, startIdx);
             if (endIdx === -1) break;
 
             const jsonStr = parseBuffer
               .slice(startIdx + OUTPUT_START_MARKER.length, endIdx)
               .trim();
-            parseBuffer = parseBuffer.slice(
-              endIdx + OUTPUT_END_MARKER.length,
-            );
+            parseBuffer = parseBuffer.slice(endIdx + OUTPUT_END_MARKER.length);
 
             try {
               const parsed: ContainerOutput = JSON.parse(jsonStr);
