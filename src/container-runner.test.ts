@@ -6,6 +6,7 @@ const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
 
 // Mock config
 vi.mock('./config.js', () => ({
+  PACKAGE_ROOT: '/tmp/nanoclaw-test-package',
   BOX_IMAGE: 'agentlite-agent:latest',
   BOX_ROOTFS_PATH: '/nonexistent/path',
   BOX_MEMORY_MIB: 2048,

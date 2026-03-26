@@ -14,7 +14,7 @@ import {
   ONECLI_URL,
   TIMEZONE,
 } from './config.js';
-import { BOX_IMAGE, BOX_ROOTFS_PATH, BOX_MEMORY_MIB, BOX_CPUS } from './config.js';
+import { BOX_IMAGE, BOX_ROOTFS_PATH, BOX_MEMORY_MIB, BOX_CPUS, PACKAGE_ROOT } from './config.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
 import { getRuntime } from './box-runtime.js';
@@ -56,7 +56,7 @@ function buildVolumeMounts(
   isMain: boolean,
 ): VolumeMount[] {
   const mounts: VolumeMount[] = [];
-  const projectRoot = process.cwd();
+  const packageRoot = PACKAGE_ROOT;
   const groupDir = resolveGroupFolderPath(group.folder);
 
   if (isMain) {
@@ -66,12 +66,12 @@ function buildVolumeMounts(
     // because cwd is the user's app, not agentlite.
     //
     // mounts.push({
-    //   hostPath: projectRoot,
+    //   hostPath: packageRoot,
     //   containerPath: '/workspace/project',
     //   readonly: true,
     // });
     //
-    // const envFile = path.join(projectRoot, '.env');
+    // const envFile = path.join(packageRoot, '.env');
     // if (fs.existsSync(envFile)) {
     //   mounts.push({
     //     hostPath: '/dev/null',
@@ -133,7 +133,7 @@ function buildVolumeMounts(
   }
 
   // Sync skills from container/skills/ into each group's .claude/skills/
-  const skillsSrc = path.join(process.cwd(), 'container', 'skills');
+  const skillsSrc = path.join(PACKAGE_ROOT, 'container', 'skills');
   const skillsDst = path.join(groupSessionsDir, 'skills');
   if (fs.existsSync(skillsSrc)) {
     for (const skillDir of fs.readdirSync(skillsSrc)) {
@@ -165,7 +165,7 @@ function buildVolumeMounts(
   // can customize it (add tools, change behavior) without affecting other
   // groups. Recompiled on container startup via entrypoint.sh.
   const agentRunnerSrc = path.join(
-    projectRoot,
+    packageRoot,
     'container',
     'agent-runner',
     'src',

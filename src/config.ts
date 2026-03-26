@@ -1,8 +1,16 @@
 import os from 'os';
 import path from 'path';
+import { fileURLToPath } from 'url';
 
 import { readEnvFile } from './env.js';
 import { isValidTimezone } from './timezone.js';
+
+// Package root: where the agentlite package is installed (resolved from this module's location).
+// Used for package assets like container/, groups/ templates, etc.
+export const PACKAGE_ROOT = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '..',
+);
 
 // Read config values from .env (falls back to process.env).
 const envConfig = readEnvFile([
@@ -55,9 +63,11 @@ export const BOX_IMAGE =
   process.env.BOX_IMAGE || 'ghcr.io/boxlite-ai/agentlite-agent:latest';
 // Path to OCI layout directory exported by container/build.sh.
 // When set, BoxLite uses this local rootfs instead of pulling from a registry.
-export const BOX_ROOTFS_PATH =
-  process.env.BOX_ROOTFS_PATH ||
-  path.join(PROJECT_ROOT, 'container', 'oci-image');
+export const BOX_ROOTFS_PATH = process.env.BOX_ROOTFS_PATH || path.join(
+  PACKAGE_ROOT,
+  'container',
+  'oci-image',
+);
 export const BOX_MEMORY_MIB = parseInt(
   process.env.BOX_MEMORY_MIB || '2048',
   10,
