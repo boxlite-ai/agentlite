@@ -46,7 +46,9 @@ type CredentialResolver = () => Promise<Record<string, string>>;
 let _credentialResolver: CredentialResolver | null = null;
 
 /** Configure model options. Called by orchestrator during start(). */
-export function setModelOptions(opts: { credentials?: CredentialResolver }): void {
+export function setModelOptions(opts: {
+  credentials?: CredentialResolver;
+}): void {
   _credentialResolver = opts.credentials ?? null;
 }
 

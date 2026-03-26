@@ -175,7 +175,6 @@ export function registerGroup(jid: string, group: RegisteredGroup): void {
   );
 }
 
-
 // --- Exports for testing ---
 
 export function getAvailableGroups(): import('./container-runner.js').AvailableGroup[] {
