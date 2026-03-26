@@ -14,7 +14,7 @@ import {
   ONECLI_URL,
   TIMEZONE,
 } from './config.js';
-import { BOX_IMAGE, BOX_ROOTFS_PATH, BOX_MEMORY_MIB, BOX_CPUS, PACKAGE_ROOT } from './config.js';
+import { BOX_IMAGE, BOX_ROOTFS_PATH, BOX_MEMORY_MIB, BOX_CPUS, getAssetsRoot } from './config.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
 import { getRuntime } from './box-runtime.js';
@@ -78,7 +78,7 @@ function buildVolumeMounts(
   isMain: boolean,
 ): VolumeMount[] {
   const mounts: VolumeMount[] = [];
-  const packageRoot = PACKAGE_ROOT;
+  const assetsRoot = getAssetsRoot();
   const groupDir = resolveGroupFolderPath(group.folder);
 
   if (isMain) {
@@ -155,7 +155,7 @@ function buildVolumeMounts(
   }
 
   // Sync skills from container/skills/ into each group's .claude/skills/
-  const skillsSrc = path.join(PACKAGE_ROOT, 'container', 'skills');
+  const skillsSrc = path.join(assetsRoot, 'container', 'skills');
   const skillsDst = path.join(groupSessionsDir, 'skills');
   if (fs.existsSync(skillsSrc)) {
     for (const skillDir of fs.readdirSync(skillsSrc)) {
@@ -187,7 +187,7 @@ function buildVolumeMounts(
   // can customize it (add tools, change behavior) without affecting other
   // groups. Recompiled on container startup via entrypoint.sh.
   const agentRunnerSrc = path.join(
-    packageRoot,
+    assetsRoot,
     'container',
     'agent-runner',
     'src',

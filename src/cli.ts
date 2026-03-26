@@ -4,14 +4,19 @@
  *
  * This is the "bin" side of the lib/bin split (like Rust's src/main.rs).
  * It uses the AgentLite SDK just like any other consumer, adding only
- * CLI-specific concerns: process error handlers and channel auto-discovery.
+ * CLI-specific concerns: process error handlers, signal handlers, .env
+ * loading, and channel auto-discovery.
  */
 
 import { installProcessHandlers, logger } from './logger.js';
+import { loadEnvConfig } from './config.js';
 import { AgentLite } from './sdk.js';
 
-// Install process-level error handlers (CLI owns the process lifecycle)
+// CLI owns the process lifecycle: install error + signal handlers
 installProcessHandlers();
+
+// Load .env config (SDK mode skips this — consumers set config explicitly)
+loadEnvConfig();
 
 // Self-register built-in channels (Telegram, etc.)
 import './channels/index.js';
@@ -21,8 +26,16 @@ import {
 } from './channels/registry.js';
 
 async function main(): Promise<void> {
-  const agent = new AgentLite({ handleSignals: true });
+  const agent = new AgentLite();
   await agent.start();
+
+  // Graceful shutdown on signals (CLI-only — SDK consumers handle their own lifecycle)
+  const shutdown = async (signal: string) => {
+    logger.info({ signal }, 'Shutdown signal received');
+    await agent.stop();
+  };
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 
   // Auto-discover and register channels from the registry
   for (const channelName of getRegisteredChannelNames()) {

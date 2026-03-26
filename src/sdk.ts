@@ -43,9 +43,6 @@ export interface AgentLiteOptions {
   name?: string;
   /** Directory for agentlite data (store/, groups/, data/, .boxlite/). Defaults to process.cwd(). */
   workdir?: string;
-  /** Install SIGTERM/SIGINT handlers for graceful shutdown. Default: false.
-   *  Set to false (default) when embedding in a host app that owns the process lifecycle. */
-  handleSignals?: boolean;
   /** LLM configuration. If not provided, falls back to OneCLI gateway for credentials. */
   llm?: LLMOptions;
 }
@@ -94,7 +91,6 @@ export class AgentLite {
     await orchestrator.start({
       channels: this._channels,
       groups: this._groups,
-      handleSignals: this._options.handleSignals ?? false,
       llm: this._options.llm,
     });
   }

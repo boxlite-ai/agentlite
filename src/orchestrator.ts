@@ -3,6 +3,7 @@ import path from 'path';
 
 import {
   ASSISTANT_NAME,
+  getAssetsRoot,
   getProjectRoot,
   GROUPS_DIR,
   IDLE_TIMEOUT,
@@ -86,8 +87,6 @@ export interface StartOptions {
   channels?: Channel[];
   /** Pre-registered groups. */
   groups?: Map<string, RegisteredGroup>;
-  /** Install SIGTERM/SIGINT handlers. Default: false. */
-  handleSignals?: boolean;
   /** LLM configuration. If not provided, falls back to OneCLI gateway. */
   llm?: {
     credentials?: () => Promise<Record<string, string>>;
@@ -128,16 +127,6 @@ export async function start(options: StartOptions = {}): Promise<void> {
   }
 
   restoreRemoteControl();
-
-  if (options.handleSignals) {
-    const shutdown = async (signal: string) => {
-      logger.info({ signal }, 'Shutdown signal received');
-      await queue.shutdown(10000);
-      for (const ch of channels) await ch.disconnect();
-    };
-    process.on('SIGTERM', () => shutdown('SIGTERM'));
-    process.on('SIGINT', () => shutdown('SIGINT'));
-  }
 
   // Connect pre-provided channels
   if (options.channels) {
@@ -301,7 +290,7 @@ async function handleRemoteControl(
     const result = await startRemoteControl(
       msg.sender,
       chatJid,
-      process.cwd(),
+      getProjectRoot(),
     );
     if (result.ok) {
       await channel.sendMessage(chatJid, result.url);
@@ -368,11 +357,7 @@ function injectChannelOpts(channel: Channel): void {
 
 /** Copy default CLAUDE.md templates to group folders. */
 function copyGroupTemplates(): void {
-  const sdkRoot = path.resolve(
-    path.dirname(new URL(import.meta.url).pathname),
-    '..',
-  );
-  const templateDir = path.join(sdkRoot, 'groups');
+  const templateDir = path.join(getAssetsRoot(), 'groups');
   if (!fs.existsSync(templateDir)) return;
 
   for (const name of ['global', 'main']) {
