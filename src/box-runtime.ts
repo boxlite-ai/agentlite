@@ -80,7 +80,10 @@ export async function cleanupOrphans(): Promise<void> {
     }
     if (orphans.length > 0) {
       logger.info(
-        { count: orphans.length, names: orphans.map((b: { name?: string }) => b.name) },
+        {
+          count: orphans.length,
+          names: orphans.map((b: { name?: string }) => b.name),
+        },
         'Stopped orphaned boxes',
       );
     }
