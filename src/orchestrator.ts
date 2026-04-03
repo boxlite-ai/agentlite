@@ -98,7 +98,6 @@ export interface StartOptions {
   groups?: Map<string, RegisteredGroup>;
   /** Model/LLM configuration. If not provided, falls back to OneCLI gateway. */
   model?: {
-    model?: string;
     credentials?: () => Promise<Record<string, string>>;
   };
   /** Per-group model options. Keyed by group folder name. */

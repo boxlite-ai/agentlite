@@ -11,8 +11,6 @@ export type CredentialResolver = () => Promise<Record<string, string>>;
 
 /** Model/LLM configuration for agent containers. */
 export interface ModelOptions {
-  /** Model identifier (e.g. "claude-sonnet-4-6"). Injected as CLAUDE_MODEL env var. */
-  model?: string;
   /** Resolve credentials to env vars injected into each agent container.
    *  If not set, falls back to OneCLI gateway. */
   credentials?: CredentialResolver;

@@ -337,43 +337,10 @@ describe('per-group model options', () => {
     await resultPromise;
 
     // spawnBox(groupName, containerName, mounts, boxEnv, ...)
-    const lastCall = mockSpawnBox.mock.calls[mockSpawnBox.mock.calls.length - 1];
+    const lastCall =
+      mockSpawnBox.mock.calls[mockSpawnBox.mock.calls.length - 1];
     return lastCall[3]; // boxEnv is the 4th arg
   }
-
-  it('injects CLAUDE_MODEL from global model options', async () => {
-    setModelOptions({ model: 'claude-sonnet-4-6' });
-
-    const boxEnv = await runAndGetBoxEnv(testGroup);
-    expect(boxEnv['CLAUDE_MODEL']).toBe('claude-sonnet-4-6');
-  });
-
-  it('omits CLAUDE_MODEL when no model is configured', async () => {
-    setModelOptions({});
-
-    const boxEnv = await runAndGetBoxEnv(testGroup);
-    expect(boxEnv['CLAUDE_MODEL']).toBeUndefined();
-  });
-
-  it('per-group model overrides global model', async () => {
-    setModelOptions({ model: 'claude-sonnet-4-6' });
-    setGroupModelOptions(
-      new Map([['test-group', { model: 'claude-haiku-4-5-20251001' }]]),
-    );
-
-    const boxEnv = await runAndGetBoxEnv(testGroup);
-    expect(boxEnv['CLAUDE_MODEL']).toBe('claude-haiku-4-5-20251001');
-  });
-
-  it('groups without per-group model fall back to global', async () => {
-    setModelOptions({ model: 'claude-sonnet-4-6' });
-    setGroupModelOptions(
-      new Map([['other-group', { model: 'claude-haiku-4-5-20251001' }]]),
-    );
-
-    const boxEnv = await runAndGetBoxEnv(testGroup);
-    expect(boxEnv['CLAUDE_MODEL']).toBe('claude-sonnet-4-6');
-  });
 
   it('per-group credentials override global credentials', async () => {
     const globalCreds = vi
@@ -407,9 +374,8 @@ describe('per-group model options', () => {
     expect(globalCreds).toHaveBeenCalled();
   });
 
-  it('per-group model and credentials work together', async () => {
+  it('per-group credentials with multiple groups only override matching group', async () => {
     setModelOptions({
-      model: 'claude-sonnet-4-6',
       credentials: vi.fn().mockResolvedValue({ ANTHROPIC_API_KEY: 'global' }),
     });
     setGroupModelOptions(
@@ -417,7 +383,6 @@ describe('per-group model options', () => {
         [
           'test-group',
           {
-            model: 'claude-haiku-4-5-20251001',
             credentials: vi
               .fn()
               .mockResolvedValue({ ANTHROPIC_API_KEY: 'group' }),
@@ -427,34 +392,51 @@ describe('per-group model options', () => {
     );
 
     const boxEnv = await runAndGetBoxEnv(testGroup);
-    expect(boxEnv['CLAUDE_MODEL']).toBe('claude-haiku-4-5-20251001');
     expect(boxEnv['ANTHROPIC_API_KEY']).toBe('group');
   });
 
   it('resetModelOptions clears all state', async () => {
-    setModelOptions({ model: 'claude-sonnet-4-6', credentials: vi.fn().mockResolvedValue({ ANTHROPIC_API_KEY: 'key' }) });
+    setModelOptions({
+      credentials: vi.fn().mockResolvedValue({ ANTHROPIC_API_KEY: 'key' }),
+    });
     setGroupModelOptions(
-      new Map([['test-group', { model: 'claude-haiku-4-5-20251001' }]]),
+      new Map([
+        [
+          'test-group',
+          {
+            credentials: vi
+              .fn()
+              .mockResolvedValue({ ANTHROPIC_API_KEY: 'group-key' }),
+          },
+        ],
+      ]),
     );
 
     // Reset everything
     resetModelOptions();
 
     const boxEnv = await runAndGetBoxEnv(testGroup);
-    expect(boxEnv['CLAUDE_MODEL']).toBeUndefined();
     // Falls back to OneCLI (mocked, returns empty env for API key)
     expect(boxEnv['ANTHROPIC_API_KEY']).toBeUndefined();
   });
 
   it('re-registering group without model clears previous override', async () => {
-    setModelOptions({ model: 'claude-sonnet-4-6' });
-    addGroupModelOptions('test-group', { model: 'claude-haiku-4-5-20251001' });
+    const globalCreds = vi
+      .fn()
+      .mockResolvedValue({ ANTHROPIC_API_KEY: 'global-key' });
+    setModelOptions({ credentials: globalCreds });
+    addGroupModelOptions('test-group', {
+      credentials: vi
+        .fn()
+        .mockResolvedValue({ ANTHROPIC_API_KEY: 'group-key' }),
+    });
 
     // Simulate re-registration without model — delete the per-group override
     deleteGroupModelOptions('test-group');
 
     const boxEnv = await runAndGetBoxEnv(testGroup);
-    // Should fall back to global model, not the deleted per-group one
-    expect(boxEnv['CLAUDE_MODEL']).toBe('claude-sonnet-4-6');
+    // Should fall back to global credentials, not the deleted per-group one
+    expect(boxEnv['ANTHROPIC_API_KEY']).toBe('global-key');
+    expect(globalCreds).toHaveBeenCalled();
   });
 });
