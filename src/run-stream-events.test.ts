@@ -10,9 +10,7 @@ import path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const contextCompressionMocks = vi.hoisted(() => ({
-  needsCompression: vi.fn(
-    (utilization: number | null) => utilization !== null && utilization >= 0.8,
-  ),
+  needsCompression: vi.fn((utilization: number | null) => utilization !== null && utilization >= 0.8),
   compress: vi.fn(
     async (messages: Array<{ sender: string; content: string }>) => {
       const kept = Math.max(1, Math.floor(messages.length * 0.2));

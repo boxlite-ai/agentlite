@@ -72,9 +72,7 @@ export class ContextCompressor {
     const textBlock = response.content.find(isTextBlock);
 
     if (!textBlock) {
-      throw new Error(
-        'Anthropic summary response did not include a text block',
-      );
+      throw new Error('Anthropic summary response did not include a text block');
     }
 
     return textBlock.text;

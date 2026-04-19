@@ -147,9 +147,7 @@ export function createSchema(
 
   // Add context utilization columns if they don't exist (migration for existing DBs)
   try {
-    database.exec(
-      `ALTER TABLE router_state ADD COLUMN context_utilization REAL`,
-    );
+    database.exec(`ALTER TABLE router_state ADD COLUMN context_utilization REAL`);
   } catch {
     /* column already exists */
   }
@@ -581,7 +579,9 @@ export class AgentDb {
 
   getContextUtilization(groupJid: string): number | null {
     const row = this.db
-      .prepare('SELECT context_utilization FROM router_state WHERE key = ?')
+      .prepare(
+        'SELECT context_utilization FROM router_state WHERE key = ?',
+      )
       .get(this.contextUtilizationKey(groupJid)) as
       | { context_utilization: number | null }
       | undefined;
