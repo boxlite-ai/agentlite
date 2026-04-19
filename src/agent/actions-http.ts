@@ -29,10 +29,23 @@ import type {
   RegisteredAction,
 } from '../api/action.js';
 import { logger } from '../logger.js';
+import {
+  summarizeArgs,
+  type AgentStatus,
+  writeStatusFile,
+} from './status-writer.js';
 
 interface TokenBinding {
   groupFolder: string;
   isMain: boolean;
+}
+
+interface StatusConfig {
+  agentId: string;
+  agentName: string;
+  dataDir: string;
+  sessionId: string;
+  sessionStartedAt: string;
 }
 
 export interface ActionsHttpInfo {
@@ -45,8 +58,14 @@ export class ActionsHttp {
   private server: http.Server | null = null;
   private info: ActionsHttpInfo | null = null;
   private tokens = new Map<string, TokenBinding>();
+  private lastKnownWorkItemId: string | null = null;
+  private turnCount = 0;
+  private lastWrittenStatus: AgentStatus | null = null;
 
-  constructor(private getActions: () => Map<string, RegisteredAction>) {}
+  constructor(
+    private getActions: () => Map<string, RegisteredAction>,
+    private readonly statusConfig?: StatusConfig,
+  ) {}
 
   getInfo(): ActionsHttpInfo | null {
     return this.info;
@@ -90,6 +109,7 @@ export class ActionsHttp {
       { url: this.info.url },
       'Action HTTP server started (LAN bound)',
     );
+    this.writeIdleStatus();
     return this.info;
   }
 
@@ -126,6 +146,26 @@ export class ActionsHttp {
     if (!match) return null;
     const token = match[1]!.trim();
     return this.tokens.get(token) ?? null;
+  }
+
+  writeTerminalStatus(status: 'done' | 'error'): void {
+    const previous = this.lastWrittenStatus ?? this.buildStatus({
+      currentTool: null,
+      lastToolDurationMs: null,
+      phase: 'idle',
+      status: 'idle',
+      toolArgsSummary: null,
+    });
+
+    this.writeStatus({
+      ...previous,
+      currentTool: null,
+      lastToolDurationMs: previous.lastToolDurationMs,
+      phase: status,
+      status,
+      toolArgsSummary: previous.toolArgsSummary,
+      updatedAt: new Date().toISOString(),
+    });
   }
 
   private async handle(
@@ -206,11 +246,43 @@ export class ActionsHttp {
         isMain: binding.isMain,
         log,
       };
+      this.captureWorkItemId(name, actionPayload);
+      this.turnCount += 1;
+      const callStart = Date.now();
+      this.writeStatus(
+        this.buildStatus({
+          currentTool: name,
+          lastToolDurationMs: null,
+          phase: 'tool_call_start',
+          status: 'working',
+          toolArgsSummary: summarizeArgs(name, actionPayload),
+        }),
+      );
       try {
         const result = await entry.handler(actionPayload, ctx);
+        const previous = this.lastWrittenStatus;
+        this.writeStatus(
+          this.buildStatus({
+            currentTool: null,
+            lastToolDurationMs: Date.now() - callStart,
+            phase: 'tool_call_done',
+            status: 'idle',
+            toolArgsSummary: previous?.toolArgsSummary ?? summarizeArgs(name, actionPayload),
+          }),
+        );
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ result: result ?? null }));
       } catch (err) {
+        const previous = this.lastWrittenStatus;
+        this.writeStatus(
+          this.buildStatus({
+            currentTool: null,
+            lastToolDurationMs: Date.now() - callStart,
+            phase: 'error',
+            status: 'error',
+            toolArgsSummary: previous?.toolArgsSummary ?? summarizeArgs(name, actionPayload),
+          }),
+        );
         logger.warn({ action: name, err }, 'Custom action handler threw');
         res.writeHead(500, { 'content-type': 'application/json' });
         res.end(
@@ -224,6 +296,78 @@ export class ActionsHttp {
 
     res.writeHead(404);
     res.end();
+  }
+
+  private buildStatus(
+    overrides: Pick<
+      AgentStatus,
+      'currentTool' | 'lastToolDurationMs' | 'phase' | 'status' | 'toolArgsSummary'
+    >,
+  ): AgentStatus {
+    const previous = this.lastWrittenStatus;
+
+    return {
+      schemaVersion: 1,
+      updatedAt: new Date().toISOString(),
+      agentId: this.statusConfig?.agentId ?? previous?.agentId ?? 'unknown-agent',
+      agentName: this.statusConfig?.agentName ?? previous?.agentName ?? 'Unknown Agent',
+      status: overrides.status,
+      phase: overrides.phase,
+      currentTool: overrides.currentTool,
+      toolArgsSummary: overrides.toolArgsSummary,
+      lastToolDurationMs: overrides.lastToolDurationMs,
+      turnCount: this.turnCount,
+      workItemId: this.lastKnownWorkItemId,
+      workItemTitle: previous?.workItemTitle ?? null,
+      sessionId: this.statusConfig?.sessionId ?? previous?.sessionId ?? 'unknown-session',
+      sessionStartedAt:
+        this.statusConfig?.sessionStartedAt
+        ?? previous?.sessionStartedAt
+        ?? new Date().toISOString(),
+    };
+  }
+
+  private captureWorkItemId(
+    actionName: string,
+    actionPayload: Record<string, unknown>,
+  ): void {
+    if (
+      actionName !== 'workflow_items_move'
+      && actionName !== 'workflow_tasks_update'
+    ) {
+      return;
+    }
+
+    const itemId = actionPayload.itemId;
+
+    if (typeof itemId === 'string' && itemId.trim().length > 0) {
+      this.lastKnownWorkItemId = itemId;
+    }
+  }
+
+  private writeIdleStatus(): void {
+    this.writeStatus(
+      this.buildStatus({
+        currentTool: null,
+        lastToolDurationMs: null,
+        phase: 'idle',
+        status: 'idle',
+        toolArgsSummary: null,
+      }),
+    );
+  }
+
+  private writeStatus(status: AgentStatus): void {
+    if (!this.statusConfig) {
+      return;
+    }
+
+    try {
+      writeStatusFile(this.statusConfig.dataDir, status);
+      this.lastWrittenStatus = status;
+    } catch (err) {
+      logger.warn({ err }, 'Failed to write agent activity status file');
+    }
   }
 }
 

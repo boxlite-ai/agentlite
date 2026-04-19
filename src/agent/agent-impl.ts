@@ -5,6 +5,7 @@
  * Multiple Agents share a BoxLite runtime via the parent AgentLite.
  */
 
+import crypto from 'crypto';
 import fs from 'fs';
 import { EventEmitter } from 'events';
 
@@ -101,7 +102,9 @@ export class AgentImpl
   private ipcHandle: { stop(): void } | null = null;
   private schedulerHandle: { stop(): void } | null = null;
   private actions = new Map<string, RegisteredAction>();
-  readonly actionsHttp = new ActionsHttp(() => this.actions);
+  private readonly sessionId: string;
+  private readonly sessionStartedAt: string;
+  readonly actionsHttp: ActionsHttp;
   /** Outbound ACP (Zed Agent Client Protocol) client; null unless opts.acp.peers is set. */
   acpClient: AcpOutboundClient | null = null;
 
@@ -123,9 +126,18 @@ export class AgentImpl
     this._options = options;
     this._registry = registry ?? null;
     this.credentialResolver = options?.credentials ?? null;
+    this.sessionId = crypto.randomBytes(16).toString('hex');
+    this.sessionStartedAt = new Date().toISOString();
     this.queue = new GroupQueue({
       dataDir: this.config.dataDir,
       maxConcurrent: runtimeConfig.maxConcurrentContainers,
+    });
+    this.actionsHttp = new ActionsHttp(() => this.actions, {
+      agentId: this.config.agentId,
+      agentName: this.config.agentName,
+      dataDir: this.config.dataDir,
+      sessionId: this.sessionId,
+      sessionStartedAt: this.sessionStartedAt,
     });
 
     // Create managers with this as the shared context
@@ -471,6 +483,7 @@ export class AgentImpl
     this._stopping = true;
     this.ipcHandle?.stop();
     this.schedulerHandle?.stop();
+    this.actionsHttp.writeTerminalStatus('done');
     await this.actionsHttp.stop();
     await this.messageMgr.waitForStop();
     if (this.acpClient) {
