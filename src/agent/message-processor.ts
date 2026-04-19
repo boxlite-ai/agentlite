@@ -10,12 +10,7 @@ import {
   writeGroupsSnapshot,
 } from '../container-runner.js';
 import { findChannel, formatMessages } from '../router.js';
-import {
-  isSenderAllowed,
-  isTriggerAllowed,
-  loadSenderAllowlist,
-  shouldDropMessage,
-} from '../sender-allowlist.js';
+import { isTriggerAllowed, loadSenderAllowlist } from '../sender-allowlist.js';
 import { isAcpNoticeMessage } from '../acp/notice.js';
 import type { AgentContext } from './agent-context.js';
 import type { ChannelManager } from './channel-manager.js';
@@ -39,10 +34,29 @@ function hasWakeTrigger(
   );
 }
 
+function extractText(
+  content: string | Array<{ text?: string | null } | null> | null | undefined,
+): string | undefined {
+  if (typeof content === 'string') {
+    const text = content.trim();
+    return text || undefined;
+  }
+  if (!Array.isArray(content)) return undefined;
+  const text = content
+    .map((block) => block?.text ?? '')
+    .join('')
+    .trim();
+  return text || undefined;
+}
+
 export class MessageProcessor {
   private messageLoopRunning = false;
   private _messageLoopPromise: Promise<void> | null = null;
   private _wakeLoop: (() => void) | null = null;
+  private pendingToolCalls = new Map<
+    string,
+    { toolName: string; startTs: number }
+  >();
 
   constructor(
     private readonly ctx: AgentContext,
@@ -226,6 +240,10 @@ export class MessageProcessor {
           if (event.sdkType === 'assistant' && msg?.message?.content) {
             for (const block of msg.message.content) {
               if (block.type === 'tool_use' && block.name && block.id) {
+                this.pendingToolCalls.set(block.id, {
+                  toolName: block.name,
+                  startTs: Date.now(),
+                });
                 this.ctx.emit('run.tool', {
                   agentId: this.ctx.id,
                   jid: chatJid,
@@ -239,6 +257,31 @@ export class MessageProcessor {
               }
             }
             resetIdleTimer();
+          }
+
+          if (event.sdkType === 'user' && msg?.message?.content) {
+            for (const block of msg.message.content) {
+              if (block.type === 'tool_result' && block.tool_use_id) {
+                const pending = this.pendingToolCalls.get(block.tool_use_id);
+                if (pending) {
+                  this.pendingToolCalls.delete(block.tool_use_id);
+                  const durationMs = Date.now() - pending.startTs;
+                  const isError = block.is_error === true;
+                  const errorMessage = isError
+                    ? extractText(block.content)?.slice(0, 500)
+                    : undefined;
+                  await this.ctx.db.recordToolUsage({
+                    groupJid: chatJid,
+                    sessionId: this.ctx.sessions[group.folder],
+                    toolName: pending.toolName,
+                    success: !isError,
+                    errorMessage,
+                    durationMs,
+                  });
+                  await this.checkToolErrorRateAlert(pending.toolName);
+                }
+              }
+            }
           }
 
           if (event.sdkType === 'tool_progress') {
@@ -325,6 +368,27 @@ export class MessageProcessor {
     }
 
     return true;
+  }
+
+  private async checkToolErrorRateAlert(toolName: string): Promise<void> {
+    const rows = await this.ctx.db.getToolUsageSummary({
+      since: new Date(Date.now() - 3600_000),
+      toolName,
+    });
+    const row = rows[0];
+    const errorRate = row ? 1 - row.successRate : 0;
+    if (row && row.callCount >= 5 && errorRate > 0.2) {
+      logger.warn(
+        { toolName, callCount: row.callCount, errorRate, windowHours: 1 },
+        'Tool error rate exceeded 20% in the last hour',
+      );
+      this.ctx.emit('run.tool_alert', {
+        toolName,
+        errorRate,
+        callCount: row.callCount,
+        windowHours: 1,
+      });
+    }
   }
 
   /** Execute agent in a container for the given group. */

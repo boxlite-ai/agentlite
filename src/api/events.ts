@@ -11,6 +11,7 @@ export interface AgentEvents extends Record<string, any[]> {
   'run.state': [payload: RunStateEvent];
   'run.sdk_message': [payload: RunSdkMessageEvent];
   'run.tool': [payload: RunToolEvent];
+  'run.tool_alert': [payload: RunToolAlertEvent];
   'run.tool_progress': [payload: RunToolProgressEvent];
   'run.subagent': [payload: RunSubagentEvent];
   'run.status': [payload: RunStatusEvent];
@@ -130,6 +131,18 @@ export interface RunToolEvent {
   input?: string;
   /** ISO timestamp. */
   timestamp: string;
+}
+
+/** Tool error-rate alert for the last hour window. */
+export interface RunToolAlertEvent {
+  /** Tool name. */
+  toolName: string;
+  /** Failure rate in the alert window. */
+  errorRate: number;
+  /** Number of calls in the alert window. */
+  callCount: number;
+  /** Alert window size in hours. */
+  windowHours: number;
 }
 
 /** Tool execution progress heartbeat. */

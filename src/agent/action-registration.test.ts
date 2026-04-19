@@ -193,6 +193,9 @@ describe('agent.action() registration', () => {
         /reserved/,
       );
       expect(() => agent.action('call_action', () => null)).toThrow(/reserved/);
+      expect(() => agent.action('tool_usage_summary', () => null)).toThrow(
+        /reserved/,
+      );
     });
 
     it('accepts names that merely share a prefix with reserved ones', () => {
@@ -217,6 +220,46 @@ describe('agent.action() registration', () => {
       agent.action('flip', () => 'second');
       const res = await call('flip');
       expect(res.json.result).toBe('second');
+    });
+  });
+
+  describe('built-in tool_usage_summary', () => {
+    it('is callable after start and returns aggregated rows', async () => {
+      await (
+        agent as unknown as {
+          db: {
+            recordToolUsage: (entry: {
+              groupJid: string;
+              sessionId?: string;
+              toolName: string;
+              success: boolean;
+              errorMessage?: string;
+              durationMs: number;
+            }) => Promise<void>;
+          };
+        }
+      ).db.recordToolUsage({
+        groupJid: 'test-group',
+        sessionId: undefined,
+        toolName: 'Bash',
+        success: true,
+        durationMs: 42,
+      });
+
+      const res = await call('tool_usage_summary', { tool_name: 'Bash' });
+
+      expect(res.status).toBe(200);
+      expect(res.json.result).toEqual({
+        summary: [
+          {
+            toolName: 'Bash',
+            callCount: 1,
+            successCount: 1,
+            successRate: 1,
+            avgDurationMs: 42,
+          },
+        ],
+      });
     });
   });
 });

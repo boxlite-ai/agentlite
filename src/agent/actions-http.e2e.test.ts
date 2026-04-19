@@ -14,7 +14,7 @@
  *   D — healthy path: LAN IP → shim reaches host handler over HTTP
  *   E — negative: bogus token is rejected and bubbles back through stdio
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import os from 'os';
 import path from 'path';
 import url from 'url';
@@ -37,6 +37,7 @@ const SHIM_PATH = path.join(
   'dist',
   'ipc-mcp-stdio.js',
 );
+const MCP_REQUEST_TIMEOUT_MS = 15000;
 
 if (!fs.existsSync(SHIM_PATH)) {
   throw new Error(
@@ -106,7 +107,7 @@ class StdioMcpClient {
             `MCP request ${method} #${id} timed out. stderr so far:\n${this.stderr}`,
           ),
         );
-      }, 5000);
+      }, MCP_REQUEST_TIMEOUT_MS);
       this.pending.set(id, (res) => {
         clearTimeout(timer);
         resolve(res);

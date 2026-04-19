@@ -1,0 +1,345 @@
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('./container-runner.js', async () => {
+  const actual = await vi.importActual<typeof import('./container-runner.js')>(
+    './container-runner.js',
+  );
+  return {
+    ...actual,
+    runContainerAgent: vi.fn(),
+  };
+});
+
+import { AgentImpl } from './agent/agent-impl.js';
+import {
+  buildAgentConfig,
+  resolveSerializableAgentSettings,
+} from './agent/config.js';
+import { _initTestDatabase, AgentDb } from './db.js';
+import { buildRuntimeConfig } from './runtime-config.js';
+import { runContainerAgent } from './container-runner.js';
+import type { Channel, RegisteredGroup } from './types.js';
+
+const runtimeConfig = buildRuntimeConfig(
+  { timezone: 'UTC' },
+  '/tmp/agentlite-test-pkg',
+);
+
+const MAIN_GROUP: RegisteredGroup = {
+  name: 'Main',
+  folder: 'main',
+  trigger: 'always',
+  added_at: '2024-01-01T00:00:00.000Z',
+  isMain: true,
+};
+
+let tmpDir: string;
+let db: AgentDb;
+
+function createAgent(name: string): AgentImpl {
+  const config = buildAgentConfig({
+    agentId: `${name}00000000`.slice(0, 8),
+    ...resolveSerializableAgentSettings(
+      name,
+      { workdir: path.join(tmpDir, 'agents', name) },
+      tmpDir,
+    ),
+  });
+  return new AgentImpl(config, runtimeConfig);
+}
+
+function createMockChannel(): Channel {
+  return {
+    name: 'mock',
+    async connect(): Promise<void> {},
+    async disconnect(): Promise<void> {},
+    async sendMessage(): Promise<void> {},
+    isConnected(): boolean {
+      return true;
+    },
+    ownsJid(jid: string): boolean {
+      return jid === 'mock:tool-usage';
+    },
+    async setTyping(): Promise<void> {},
+  };
+}
+
+function setupAgent(): AgentImpl {
+  const agent = createAgent('tool-usage');
+  agent._setDbForTests(db);
+  agent._setRegisteredGroups({ 'mock:tool-usage': MAIN_GROUP });
+  (agent as unknown as { _started: boolean })._started = true;
+  (agent as unknown as { channels: Map<string, Channel> }).channels.set(
+    'mock',
+    createMockChannel(),
+  );
+
+  db.storeChatMetadata(
+    'mock:tool-usage',
+    '2026-04-19T00:00:00.000Z',
+    'Tool Usage Chat',
+  );
+  db.storeMessage({
+    id: 'msg-1',
+    chat_jid: 'mock:tool-usage',
+    sender: 'user1',
+    sender_name: 'User 1',
+    content: 'run the tool',
+    timestamp: '2026-04-19T00:00:01.000Z',
+    is_from_me: false,
+  });
+
+  return agent;
+}
+
+function sdkMsg(sdkType: string, message: unknown, sdkSubtype?: string) {
+  return { type: 'sdk_message' as const, sdkType, sdkSubtype, message };
+}
+
+describe('tool usage analytics', () => {
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentlite-tool-usage-'));
+    db = _initTestDatabase();
+    vi.mocked(runContainerAgent).mockReset();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+  });
+
+  it('records successful tool results from tool_use/tool_result SDK messages', async () => {
+    const agent = setupAgent();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-04-19T00:00:00.000Z'));
+
+    vi.mocked(runContainerAgent).mockImplementation(
+      async (_group, _input, _rc, _onProcess, onOutput) => {
+        await onOutput?.(
+          sdkMsg('assistant', {
+            uuid: 'a1',
+            message: {
+              content: [
+                {
+                  type: 'tool_use',
+                  name: 'Bash',
+                  id: 'tool-1',
+                  input: { command: 'pwd' },
+                },
+              ],
+            },
+          }),
+        );
+        vi.advanceTimersByTime(25);
+        await onOutput?.(
+          sdkMsg('user', {
+            uuid: 'u1',
+            message: {
+              content: [
+                {
+                  type: 'tool_result',
+                  tool_use_id: 'tool-1',
+                  is_error: false,
+                  content: 'ok',
+                },
+              ],
+            },
+          }),
+        );
+        await onOutput?.({
+          type: 'state',
+          state: 'stopped',
+          reason: 'exit',
+          exitCode: 0,
+        });
+        return { status: 'success', result: null };
+      },
+    );
+
+    await agent.processGroupMessages('mock:tool-usage');
+
+    const rows = (
+      db as unknown as {
+        db: {
+          prepare: (sql: string) => {
+            all: () => Array<{
+              group_jid: string;
+              tool_name: string;
+              success: number;
+              error_message: string | null;
+              duration_ms: number;
+            }>;
+          };
+        };
+      }
+    ).db
+      .prepare(
+        `
+        SELECT group_jid, tool_name, success, error_message, duration_ms
+        FROM tool_usage
+      `,
+      )
+      .all();
+
+    expect(rows).toEqual([
+      {
+        group_jid: 'mock:tool-usage',
+        tool_name: 'Bash',
+        success: 1,
+        error_message: null,
+        duration_ms: 25,
+      },
+    ]);
+
+    await expect(db.getToolUsageSummary()).resolves.toEqual([
+      expect.objectContaining({
+        toolName: 'Bash',
+        callCount: 1,
+        successCount: 1,
+        successRate: 1,
+      }),
+    ]);
+  });
+
+  it('records failed tool results as success_rate 0', async () => {
+    const agent = setupAgent();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-04-19T00:00:00.000Z'));
+
+    vi.mocked(runContainerAgent).mockImplementation(
+      async (_group, _input, _rc, _onProcess, onOutput) => {
+        await onOutput?.(
+          sdkMsg('assistant', {
+            uuid: 'a1',
+            message: {
+              content: [
+                {
+                  type: 'tool_use',
+                  name: 'Bash',
+                  id: 'tool-2',
+                  input: { command: 'false' },
+                },
+              ],
+            },
+          }),
+        );
+        vi.advanceTimersByTime(10);
+        await onOutput?.(
+          sdkMsg('user', {
+            uuid: 'u1',
+            message: {
+              content: [
+                {
+                  type: 'tool_result',
+                  tool_use_id: 'tool-2',
+                  is_error: true,
+                  content: 'command failed',
+                },
+              ],
+            },
+          }),
+        );
+        await onOutput?.({
+          type: 'state',
+          state: 'stopped',
+          reason: 'exit',
+          exitCode: 0,
+        });
+        return { status: 'success', result: null };
+      },
+    );
+
+    await agent.processGroupMessages('mock:tool-usage');
+
+    await expect(db.getToolUsageSummary()).resolves.toEqual([
+      expect.objectContaining({
+        toolName: 'Bash',
+        callCount: 1,
+        successCount: 0,
+        successRate: 0,
+      }),
+    ]);
+  });
+
+  it('emits run.tool_alert when a tool falls below the hourly success threshold', async () => {
+    const agent = setupAgent();
+    const alerts: Array<Record<string, unknown>> = [];
+    agent.on('run.tool_alert', (evt) =>
+      alerts.push(evt as unknown as Record<string, unknown>),
+    );
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-04-19T00:00:00.000Z'));
+
+    vi.mocked(runContainerAgent).mockImplementation(
+      async (_group, _input, _rc, _onProcess, onOutput) => {
+        for (let i = 1; i <= 5; i += 1) {
+          await onOutput?.(
+            sdkMsg('assistant', {
+              uuid: `a-${i}`,
+              message: {
+                content: [
+                  {
+                    type: 'tool_use',
+                    name: 'Bash',
+                    id: `tool-${i}`,
+                    input: { command: `step-${i}` },
+                  },
+                ],
+              },
+            }),
+          );
+          vi.advanceTimersByTime(1);
+          await onOutput?.(
+            sdkMsg('user', {
+              uuid: `u-${i}`,
+              message: {
+                content: [
+                  {
+                    type: 'tool_result',
+                    tool_use_id: `tool-${i}`,
+                    is_error: i !== 5,
+                    content: i !== 5 ? `failure ${i}` : 'ok',
+                  },
+                ],
+              },
+            }),
+          );
+        }
+        await onOutput?.({
+          type: 'state',
+          state: 'stopped',
+          reason: 'exit',
+          exitCode: 0,
+        });
+        return { status: 'success', result: null };
+      },
+    );
+
+    await agent.processGroupMessages('mock:tool-usage');
+
+    await expect(db.getToolUsageSummary()).resolves.toEqual([
+      expect.objectContaining({
+        toolName: 'Bash',
+        callCount: 5,
+        successCount: 1,
+        successRate: 0.2,
+      }),
+    ]);
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toMatchObject({
+      toolName: 'Bash',
+      errorRate: 0.8,
+      callCount: 5,
+      windowHours: 1,
+    });
+    expect(alerts[0]).not.toHaveProperty('agentId');
+  });
+});

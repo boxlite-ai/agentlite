@@ -1,6 +1,5 @@
 import { CronExpressionParser } from 'cron-parser';
 import fs from 'fs';
-import path from 'path';
 
 import {
   ContainerEvent,

@@ -82,6 +82,19 @@ export function createSchema(
       container_config TEXT,
       requires_trigger INTEGER DEFAULT 1
     );
+    CREATE TABLE IF NOT EXISTS tool_usage (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      group_jid     TEXT    NOT NULL,
+      session_id    TEXT,
+      tool_name     TEXT    NOT NULL,
+      success       INTEGER NOT NULL DEFAULT 1,
+      error_message TEXT,
+      duration_ms   INTEGER NOT NULL,
+      ts            TEXT    NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_tool_usage_ts        ON tool_usage(ts);
+    CREATE INDEX IF NOT EXISTS idx_tool_usage_tool_name ON tool_usage(tool_name);
+    CREATE INDEX IF NOT EXISTS idx_tool_usage_group_jid ON tool_usage(group_jid);
 
   `);
 
@@ -521,6 +534,72 @@ export class AgentDb {
         log.result,
         log.error,
       );
+  }
+
+  async recordToolUsage(entry: {
+    groupJid: string;
+    sessionId?: string;
+    toolName: string;
+    success: boolean;
+    errorMessage?: string;
+    durationMs: number;
+  }): Promise<void> {
+    this.db
+      .prepare(
+        `
+    INSERT INTO tool_usage (group_jid, session_id, tool_name, success, error_message, duration_ms, ts)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `,
+      )
+      .run(
+        entry.groupJid,
+        entry.sessionId ?? null,
+        entry.toolName,
+        entry.success ? 1 : 0,
+        entry.errorMessage ?? null,
+        entry.durationMs,
+        new Date().toISOString(),
+      );
+  }
+
+  async getToolUsageSummary(opts?: {
+    since?: Date;
+    toolName?: string;
+  }): Promise<
+    Array<{
+      toolName: string;
+      callCount: number;
+      successCount: number;
+      successRate: number;
+      avgDurationMs: number;
+    }>
+  > {
+    return this.db
+      .prepare(
+        `
+    SELECT
+      tool_name                                  AS toolName,
+      COUNT(*)                                   AS callCount,
+      COALESCE(SUM(success), 0)                  AS successCount,
+      CAST(COALESCE(SUM(success), 0) AS REAL) / COUNT(*) AS successRate,
+      AVG(duration_ms)                           AS avgDurationMs
+    FROM tool_usage
+    WHERE (:since IS NULL OR ts >= :since)
+      AND (:toolName IS NULL OR tool_name = :toolName)
+    GROUP BY tool_name
+    ORDER BY callCount DESC, toolName ASC
+  `,
+      )
+      .all({
+        since: opts?.since?.toISOString() ?? null,
+        toolName: opts?.toolName ?? null,
+      }) as Array<{
+      toolName: string;
+      callCount: number;
+      successCount: number;
+      successRate: number;
+      avgDurationMs: number;
+    }>;
   }
 
   // --- Router state ---
