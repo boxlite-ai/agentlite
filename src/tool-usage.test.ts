@@ -108,6 +108,7 @@ describe('tool usage analytics', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     try {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     } catch {
@@ -117,6 +118,8 @@ describe('tool usage analytics', () => {
 
   it('records successful tool results from tool_use/tool_result SDK messages', async () => {
     const agent = setupAgent();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-04-19T00:00:00.000Z'));
 
     vi.mocked(runContainerAgent).mockImplementation(
       async (_group, _input, _rc, _onProcess, onOutput) => {
@@ -135,6 +138,7 @@ describe('tool usage analytics', () => {
             },
           }),
         );
+        vi.advanceTimersByTime(25);
         await onOutput?.(
           sdkMsg('user', {
             uuid: 'u1',
@@ -162,18 +166,53 @@ describe('tool usage analytics', () => {
 
     await agent.processGroupMessages('mock:tool-usage');
 
-    expect(db.getToolUsageSummary()).toEqual([
-      expect.objectContaining({
+    const rows = (
+      db as unknown as {
+        db: {
+          prepare: (sql: string) => {
+            all: () => Array<{
+              group_jid: string;
+              tool_name: string;
+              success: number;
+              error_message: string | null;
+              duration_ms: number;
+            }>;
+          };
+        };
+      }
+    ).db
+      .prepare(
+        `
+        SELECT group_jid, tool_name, success, error_message, duration_ms
+        FROM tool_usage
+      `,
+      )
+      .all();
+
+    expect(rows).toEqual([
+      {
+        group_jid: 'mock:tool-usage',
         tool_name: 'Bash',
-        call_count: 1,
-        success_count: 1,
-        success_rate: 1,
+        success: 1,
+        error_message: null,
+        duration_ms: 25,
+      },
+    ]);
+
+    await expect(db.getToolUsageSummary()).resolves.toEqual([
+      expect.objectContaining({
+        toolName: 'Bash',
+        callCount: 1,
+        successCount: 1,
+        successRate: 1,
       }),
     ]);
   });
 
   it('records failed tool results as success_rate 0', async () => {
     const agent = setupAgent();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-04-19T00:00:00.000Z'));
 
     vi.mocked(runContainerAgent).mockImplementation(
       async (_group, _input, _rc, _onProcess, onOutput) => {
@@ -192,6 +231,7 @@ describe('tool usage analytics', () => {
             },
           }),
         );
+        vi.advanceTimersByTime(10);
         await onOutput?.(
           sdkMsg('user', {
             uuid: 'u1',
@@ -219,12 +259,12 @@ describe('tool usage analytics', () => {
 
     await agent.processGroupMessages('mock:tool-usage');
 
-    expect(db.getToolUsageSummary()).toEqual([
+    await expect(db.getToolUsageSummary()).resolves.toEqual([
       expect.objectContaining({
-        tool_name: 'Bash',
-        call_count: 1,
-        success_count: 0,
-        success_rate: 0,
+        toolName: 'Bash',
+        callCount: 1,
+        successCount: 0,
+        successRate: 0,
       }),
     ]);
   });
@@ -235,6 +275,8 @@ describe('tool usage analytics', () => {
     agent.on('run.tool_alert', (evt) =>
       alerts.push(evt as unknown as Record<string, unknown>),
     );
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-04-19T00:00:00.000Z'));
 
     vi.mocked(runContainerAgent).mockImplementation(
       async (_group, _input, _rc, _onProcess, onOutput) => {
@@ -254,6 +296,7 @@ describe('tool usage analytics', () => {
               },
             }),
           );
+          vi.advanceTimersByTime(1);
           await onOutput?.(
             sdkMsg('user', {
               uuid: `u-${i}`,
@@ -282,21 +325,21 @@ describe('tool usage analytics', () => {
 
     await agent.processGroupMessages('mock:tool-usage');
 
-    expect(db.getToolUsageSummary()).toEqual([
+    await expect(db.getToolUsageSummary()).resolves.toEqual([
       expect.objectContaining({
-        tool_name: 'Bash',
-        call_count: 5,
-        success_count: 1,
-        success_rate: 0.2,
+        toolName: 'Bash',
+        callCount: 5,
+        successCount: 1,
+        successRate: 0.2,
       }),
     ]);
     expect(alerts).toHaveLength(1);
     expect(alerts[0]).toMatchObject({
-      agentId: agent.id,
       toolName: 'Bash',
+      errorRate: 0.8,
       callCount: 5,
-      successRate: 0.2,
+      windowHours: 1,
     });
-    expect(alerts[0]).not.toHaveProperty('jid');
+    expect(alerts[0]).not.toHaveProperty('agentId');
   });
 });

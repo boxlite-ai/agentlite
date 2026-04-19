@@ -53,6 +53,10 @@ export class MessageProcessor {
   private messageLoopRunning = false;
   private _messageLoopPromise: Promise<void> | null = null;
   private _wakeLoop: (() => void) | null = null;
+  private pendingToolCalls = new Map<
+    string,
+    { toolName: string; startTs: number }
+  >();
 
   constructor(
     private readonly ctx: AgentContext,
@@ -167,10 +171,6 @@ export class MessageProcessor {
     await channel.setTyping?.(chatJid, true);
     let hadError = false;
     let outputSentToUser = false;
-    const pendingToolCalls = new Map<
-      string,
-      { toolName: string; startedAt: number }
-    >();
 
     const output = await this.runAgent(
       group,
@@ -240,9 +240,9 @@ export class MessageProcessor {
           if (event.sdkType === 'assistant' && msg?.message?.content) {
             for (const block of msg.message.content) {
               if (block.type === 'tool_use' && block.name && block.id) {
-                pendingToolCalls.set(block.id, {
+                this.pendingToolCalls.set(block.id, {
                   toolName: block.name,
-                  startedAt: Date.now(),
+                  startTs: Date.now(),
                 });
                 this.ctx.emit('run.tool', {
                   agentId: this.ctx.id,
@@ -262,25 +262,23 @@ export class MessageProcessor {
           if (event.sdkType === 'user' && msg?.message?.content) {
             for (const block of msg.message.content) {
               if (block.type === 'tool_result' && block.tool_use_id) {
-                const pending = pendingToolCalls.get(block.tool_use_id);
+                const pending = this.pendingToolCalls.get(block.tool_use_id);
                 if (pending) {
-                  pendingToolCalls.delete(block.tool_use_id);
-                  const durationMs = Date.now() - pending.startedAt;
-                  const ts = new Date().toISOString();
+                  this.pendingToolCalls.delete(block.tool_use_id);
+                  const durationMs = Date.now() - pending.startTs;
                   const isError = block.is_error === true;
                   const errorMessage = isError
                     ? extractText(block.content)?.slice(0, 500)
                     : undefined;
-                  this.ctx.db.recordToolUsage({
+                  await this.ctx.db.recordToolUsage({
                     groupJid: chatJid,
-                    sessionId: undefined,
+                    sessionId: this.ctx.sessions[group.folder],
                     toolName: pending.toolName,
                     success: !isError,
                     errorMessage,
                     durationMs,
-                    ts,
                   });
-                  this.checkToolErrorRateAlert(pending.toolName);
+                  await this.checkToolErrorRateAlert(pending.toolName);
                 }
               }
             }
@@ -372,24 +370,23 @@ export class MessageProcessor {
     return true;
   }
 
-  private checkToolErrorRateAlert(toolName: string): void {
-    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-    const rows = this.ctx.db.getToolUsageSummary({
-      since: oneHourAgo,
+  private async checkToolErrorRateAlert(toolName: string): Promise<void> {
+    const rows = await this.ctx.db.getToolUsageSummary({
+      since: new Date(Date.now() - 3600_000),
       toolName,
     });
     const row = rows[0];
-    if (row && row.call_count >= 5 && row.success_rate < 0.8) {
+    const errorRate = row ? 1 - row.successRate : 0;
+    if (row && row.callCount >= 5 && errorRate > 0.2) {
       logger.warn(
-        { toolName, callCount: row.call_count, successRate: row.success_rate },
+        { toolName, callCount: row.callCount, errorRate, windowHours: 1 },
         'Tool error rate exceeded 20% in the last hour',
       );
       this.ctx.emit('run.tool_alert', {
-        agentId: this.ctx.id,
         toolName,
-        callCount: row.call_count,
-        successRate: row.success_rate,
-        timestamp: new Date().toISOString(),
+        errorRate,
+        callCount: row.callCount,
+        windowHours: 1,
       });
     }
   }

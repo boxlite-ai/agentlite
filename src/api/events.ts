@@ -135,16 +135,14 @@ export interface RunToolEvent {
 
 /** Tool error-rate alert for the last hour window. */
 export interface RunToolAlertEvent {
-  /** Stable agent identifier. */
-  agentId: string;
   /** Tool name. */
   toolName: string;
+  /** Failure rate in the alert window. */
+  errorRate: number;
   /** Number of calls in the alert window. */
   callCount: number;
-  /** Success rate in the alert window. */
-  successRate: number;
-  /** ISO timestamp. */
-  timestamp: string;
+  /** Alert window size in hours. */
+  windowHours: number;
 }
 
 /** Tool execution progress heartbeat. */

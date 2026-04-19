@@ -471,8 +471,16 @@ export class AgentImpl
         tool_name: z.string().optional().describe('Filter to a specific tool'),
       },
       handler: async (payload) => {
-        const rows = this.db.getToolUsageSummary({
-          since: payload.since as string | undefined,
+        const since =
+          typeof payload.since === 'string'
+            ? new Date(payload.since)
+            : undefined;
+        if (since && Number.isNaN(since.getTime())) {
+          throw new Error(`Invalid since timestamp: ${payload.since}`);
+        }
+
+        const rows = await this.db.getToolUsageSummary({
+          since,
           toolName: payload.tool_name as string | undefined,
         });
         return { summary: rows };

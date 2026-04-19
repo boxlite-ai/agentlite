@@ -536,15 +536,14 @@ export class AgentDb {
       );
   }
 
-  recordToolUsage(entry: {
+  async recordToolUsage(entry: {
     groupJid: string;
-    sessionId: string | undefined;
+    sessionId?: string;
     toolName: string;
     success: boolean;
     errorMessage?: string;
     durationMs: number;
-    ts: string;
-  }): void {
+  }): Promise<void> {
     this.db
       .prepare(
         `
@@ -559,42 +558,47 @@ export class AgentDb {
         entry.success ? 1 : 0,
         entry.errorMessage ?? null,
         entry.durationMs,
-        entry.ts,
+        new Date().toISOString(),
       );
   }
 
-  getToolUsageSummary(opts?: { since?: string; toolName?: string }): Array<{
-    tool_name: string;
-    call_count: number;
-    success_count: number;
-    success_rate: number;
-    avg_duration_ms: number;
-  }> {
+  async getToolUsageSummary(opts?: {
+    since?: Date;
+    toolName?: string;
+  }): Promise<
+    Array<{
+      toolName: string;
+      callCount: number;
+      successCount: number;
+      successRate: number;
+      avgDurationMs: number;
+    }>
+  > {
     return this.db
       .prepare(
         `
     SELECT
-      tool_name,
-      COUNT(*)                                   AS call_count,
-      SUM(success)                               AS success_count,
-      CAST(SUM(success) AS REAL) / COUNT(*)      AS success_rate,
-      CAST(SUM(duration_ms) AS REAL) / COUNT(*)  AS avg_duration_ms
+      tool_name                                  AS toolName,
+      COUNT(*)                                   AS callCount,
+      COALESCE(SUM(success), 0)                  AS successCount,
+      CAST(COALESCE(SUM(success), 0) AS REAL) / COUNT(*) AS successRate,
+      AVG(duration_ms)                           AS avgDurationMs
     FROM tool_usage
     WHERE (:since IS NULL OR ts >= :since)
       AND (:toolName IS NULL OR tool_name = :toolName)
     GROUP BY tool_name
-    ORDER BY call_count DESC
+    ORDER BY callCount DESC, toolName ASC
   `,
       )
       .all({
-        since: opts?.since ?? null,
+        since: opts?.since?.toISOString() ?? null,
         toolName: opts?.toolName ?? null,
       }) as Array<{
-      tool_name: string;
-      call_count: number;
-      success_count: number;
-      success_rate: number;
-      avg_duration_ms: number;
+      toolName: string;
+      callCount: number;
+      successCount: number;
+      successRate: number;
+      avgDurationMs: number;
     }>;
   }
 

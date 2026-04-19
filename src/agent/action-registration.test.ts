@@ -225,18 +225,17 @@ describe('agent.action() registration', () => {
 
   describe('built-in tool_usage_summary', () => {
     it('is callable after start and returns aggregated rows', async () => {
-      (
+      await (
         agent as unknown as {
           db: {
             recordToolUsage: (entry: {
               groupJid: string;
-              sessionId: string | undefined;
+              sessionId?: string;
               toolName: string;
               success: boolean;
               errorMessage?: string;
               durationMs: number;
-              ts: string;
-            }) => void;
+            }) => Promise<void>;
           };
         }
       ).db.recordToolUsage({
@@ -245,7 +244,6 @@ describe('agent.action() registration', () => {
         toolName: 'Bash',
         success: true,
         durationMs: 42,
-        ts: '2026-04-19T00:00:00.000Z',
       });
 
       const res = await call('tool_usage_summary', { tool_name: 'Bash' });
@@ -254,11 +252,11 @@ describe('agent.action() registration', () => {
       expect(res.json.result).toEqual({
         summary: [
           {
-            tool_name: 'Bash',
-            call_count: 1,
-            success_count: 1,
-            success_rate: 1,
-            avg_duration_ms: 42,
+            toolName: 'Bash',
+            callCount: 1,
+            successCount: 1,
+            successRate: 1,
+            avgDurationMs: 42,
           },
         ],
       });

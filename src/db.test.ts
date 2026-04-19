@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 import { _initTestDatabase, AgentDb } from './db.js';
 import { NewMessage } from './types.js';
@@ -7,6 +7,10 @@ let db: AgentDb;
 
 beforeEach(() => {
   db = _initTestDatabase();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 // Helper to store a message using the normalized NewMessage interface
@@ -529,14 +533,16 @@ describe('registered group isMain', () => {
 });
 
 describe('tool_usage', () => {
-  it('recordToolUsage inserts rows', () => {
-    db.recordToolUsage({
+  it('recordToolUsage inserts rows', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-04-19T00:00:00.000Z'));
+
+    await db.recordToolUsage({
       groupJid: 'group@g.us',
       toolName: 'Bash',
       success: true,
       errorMessage: undefined,
       durationMs: 120,
-      ts: '2026-04-19T00:00:00.000Z',
     });
 
     const rows = (
@@ -577,103 +583,111 @@ describe('tool_usage', () => {
     ]);
   });
 
-  it('getToolUsageSummary returns correct aggregates', () => {
-    db.recordToolUsage({
+  it('getToolUsageSummary returns correct aggregates', async () => {
+    vi.useFakeTimers();
+
+    vi.setSystemTime(new Date('2026-04-19T00:00:00.000Z'));
+    await db.recordToolUsage({
       groupJid: 'group@g.us',
       toolName: 'Bash',
       success: true,
       durationMs: 100,
-      ts: '2026-04-19T00:00:00.000Z',
     });
-    db.recordToolUsage({
+    vi.setSystemTime(new Date('2026-04-19T00:01:00.000Z'));
+    await db.recordToolUsage({
       groupJid: 'group@g.us',
       toolName: 'Bash',
       success: true,
       durationMs: 110,
-      ts: '2026-04-19T00:01:00.000Z',
     });
-    db.recordToolUsage({
+    vi.setSystemTime(new Date('2026-04-19T00:02:00.000Z'));
+    await db.recordToolUsage({
       groupJid: 'group@g.us',
       toolName: 'Bash',
       success: true,
       durationMs: 120,
-      ts: '2026-04-19T00:02:00.000Z',
     });
-    db.recordToolUsage({
+    vi.setSystemTime(new Date('2026-04-19T00:03:00.000Z'));
+    await db.recordToolUsage({
       groupJid: 'group@g.us',
       toolName: 'Bash',
       success: false,
       errorMessage: 'boom',
       durationMs: 130,
-      ts: '2026-04-19T00:03:00.000Z',
     });
 
-    expect(db.getToolUsageSummary()).toEqual([
+    await expect(db.getToolUsageSummary()).resolves.toEqual([
       {
-        tool_name: 'Bash',
-        call_count: 4,
-        success_count: 3,
-        success_rate: 0.75,
-        avg_duration_ms: 115,
+        toolName: 'Bash',
+        callCount: 4,
+        successCount: 3,
+        successRate: 0.75,
+        avgDurationMs: 115,
       },
     ]);
   });
 
-  it('applies since filter to exclude older rows', () => {
-    db.recordToolUsage({
+  it('applies since filter to exclude older rows', async () => {
+    vi.useFakeTimers();
+
+    vi.setSystemTime(new Date('2026-04-18T23:00:00.000Z'));
+    await db.recordToolUsage({
       groupJid: 'group@g.us',
       toolName: 'Read',
       success: true,
       durationMs: 50,
-      ts: '2026-04-18T23:00:00.000Z',
     });
-    db.recordToolUsage({
+    vi.setSystemTime(new Date('2026-04-19T01:00:00.000Z'));
+    await db.recordToolUsage({
       groupJid: 'group@g.us',
       toolName: 'Read',
       success: false,
       errorMessage: 'timeout',
       durationMs: 150,
-      ts: '2026-04-19T01:00:00.000Z',
     });
 
-    expect(
-      db.getToolUsageSummary({ since: '2026-04-19T00:00:00.000Z' }),
-    ).toEqual([
+    await expect(
+      db.getToolUsageSummary({ since: new Date('2026-04-19T00:00:00.000Z') }),
+    ).resolves.toEqual([
       {
-        tool_name: 'Read',
-        call_count: 1,
-        success_count: 0,
-        success_rate: 0,
-        avg_duration_ms: 150,
+        toolName: 'Read',
+        callCount: 1,
+        successCount: 0,
+        successRate: 0,
+        avgDurationMs: 150,
       },
     ]);
   });
 
-  it('filters to a specific tool name', () => {
-    db.recordToolUsage({
+  it('filters to a specific tool name', async () => {
+    vi.useFakeTimers();
+
+    vi.setSystemTime(new Date('2026-04-19T00:00:00.000Z'));
+    await db.recordToolUsage({
       groupJid: 'group@g.us',
       toolName: 'Read',
       success: true,
       durationMs: 80,
-      ts: '2026-04-19T00:00:00.000Z',
     });
-    db.recordToolUsage({
+    vi.setSystemTime(new Date('2026-04-19T00:01:00.000Z'));
+    await db.recordToolUsage({
       groupJid: 'group@g.us',
       toolName: 'Bash',
       success: false,
       errorMessage: 'permission denied',
       durationMs: 180,
-      ts: '2026-04-19T00:01:00.000Z',
     });
 
-    expect(db.getToolUsageSummary({ toolName: 'Read' })).toEqual([
-      {
-        tool_name: 'Read',
-        call_count: 1,
-        success_count: 1,
-        success_rate: 1,
-        avg_duration_ms: 80,
-      },
-    ]);
+    await expect(db.getToolUsageSummary({ toolName: 'Read' })).resolves.toEqual(
+      [
+        {
+          toolName: 'Read',
+          callCount: 1,
+          successCount: 1,
+          successRate: 1,
+          avgDurationMs: 80,
+        },
+      ],
+    );
   });
 });
