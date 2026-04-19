@@ -61,6 +61,7 @@ import { ChannelManager } from './channel-manager.js';
 import { GroupManager } from './group-manager.js';
 import { TaskManager } from './task-manager.js';
 import { MessageProcessor } from './message-processor.js';
+import { registerUsageActions } from './usage-actions.js';
 
 export { type Agent };
 
@@ -442,6 +443,7 @@ export class AgentImpl
       dataDir: this.config.dataDir,
       assistantName: this.config.assistantName,
     });
+    registerUsageActions(this, this.db);
     logger.info({ agent: this.name }, 'Database initialized');
     this.groupMgr.loadState();
 

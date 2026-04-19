@@ -96,6 +96,22 @@ export interface ContainerErrorEvent {
   newSessionId?: string;
 }
 
+export interface ContainerTokenUsageEvent {
+  type: 'token_usage';
+  usage: {
+    group_jid: string;
+    session_id: string | null;
+    model: string;
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+    cache_read_tokens: number;
+    cache_write_tokens: number;
+    latency_ms: number;
+    ts: number;
+  };
+}
+
 /**
  * Raw SDK message forwarded from the container.
  * The container is a dumb pipe — every SDK message is forwarded as-is.
@@ -116,6 +132,7 @@ export type ContainerEvent =
   | ContainerStateEvent
   | ContainerResultEvent
   | ContainerErrorEvent
+  | ContainerTokenUsageEvent
   | ContainerSdkMessageEvent;
 
 export interface ContainerOutput {

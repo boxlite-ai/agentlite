@@ -20,6 +20,7 @@ import {
   query,
   HookCallback,
   PreCompactHookInput,
+  type SDKResultMessage,
 } from '@anthropic-ai/claude-agent-sdk';
 import { fileURLToPath } from 'url';
 
@@ -77,10 +78,27 @@ interface ContainerSdkMessageOutput {
   message: unknown;
 }
 
+interface ContainerTokenUsageOutput {
+  type: 'token_usage';
+  usage: {
+    group_jid: string;
+    session_id: string | null;
+    model: string;
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+    cache_read_tokens: number;
+    cache_write_tokens: number;
+    latency_ms: number;
+    ts: number;
+  };
+}
+
 type ContainerOutput =
   | ContainerStateOutput
   | ContainerResultOutput
   | ContainerErrorOutput
+  | ContainerTokenUsageOutput
   | ContainerSdkMessageOutput;
 
 interface SessionEntry {
@@ -166,6 +184,62 @@ function writeOutput(output: ContainerOutput): void {
 
 function log(message: string): void {
   console.error(`[agent-runner] ${message}`);
+}
+
+function resolveUsageModel(
+  currentModel: string | undefined,
+  modelUsage: SDKResultMessage['modelUsage'],
+): string {
+  const models = Object.entries(modelUsage);
+  if (models.length === 1) {
+    return models[0]![0];
+  }
+  if (currentModel && models.some(([model]) => model === currentModel)) {
+    return currentModel;
+  }
+  if (currentModel) {
+    return currentModel;
+  }
+  if (models.length === 0) {
+    return 'unknown';
+  }
+
+  return models
+    .slice()
+    .sort((a, b) => {
+      const totalA = a[1].inputTokens + a[1].outputTokens;
+      const totalB = b[1].inputTokens + b[1].outputTokens;
+      if (totalA !== totalB) return totalB - totalA;
+      return a[0].localeCompare(b[0]);
+    })[0]![0];
+}
+
+function captureTokenUsageSummary(params: {
+  groupJid: string;
+  sessionId: string | undefined;
+  currentModel: string | undefined;
+  queryStartedAt: number;
+  message: SDKResultMessage;
+}): ContainerTokenUsageOutput['usage'] {
+  const usage = params.message.usage;
+  const promptTokens = usage.input_tokens ?? 0;
+  const completionTokens = usage.output_tokens ?? 0;
+  const cacheReadTokens = usage.cache_read_input_tokens ?? 0;
+  const cacheWriteTokens = usage.cache_creation_input_tokens ?? 0;
+  const ts = Date.now();
+
+  return {
+    group_jid: params.groupJid,
+    session_id: params.sessionId ?? null,
+    model: resolveUsageModel(params.currentModel, params.message.modelUsage),
+    prompt_tokens: promptTokens,
+    completion_tokens: completionTokens,
+    total_tokens: promptTokens + completionTokens,
+    cache_read_tokens: cacheReadTokens,
+    cache_write_tokens: cacheWriteTokens,
+    latency_ms: ts - params.queryStartedAt,
+    ts,
+  };
 }
 
 function getSessionSummary(
@@ -444,6 +518,7 @@ async function runQuery(
   lastAssistantUuid?: string;
   closedDuringQuery: boolean;
 }> {
+  const queryStartedAt = Date.now();
   const stream = new MessageStream();
   stream.push(prompt);
   writeOutput({
@@ -476,6 +551,7 @@ async function runQuery(
 
   let newSessionId: string | undefined;
   let lastAssistantUuid: string | undefined;
+  let currentModel: string | undefined;
   let messageCount = 0;
   let resultCount = 0;
 
@@ -601,6 +677,7 @@ async function runQuery(
     }
     if (message.type === 'system' && message.subtype === 'init') {
       newSessionId = message.session_id;
+      currentModel = message.model;
       log(`Session initialized: ${newSessionId}`);
     }
 
@@ -619,6 +696,17 @@ async function runQuery(
     // ── Backward-compat: emit result for host message delivery ─
     if (message.type === 'result') {
       resultCount++;
+      writeOutput({
+        type: 'token_usage',
+        usage: captureTokenUsageSummary({
+          groupJid: containerInput.chatJid,
+          sessionId: newSessionId ?? sessionId,
+          currentModel,
+          queryStartedAt,
+          message,
+        }),
+      });
+
       const textResult =
         'result' in message ? (message as { result?: string }).result : null;
       log(

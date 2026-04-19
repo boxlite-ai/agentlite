@@ -348,20 +348,30 @@ export class MessageProcessor {
       this.ctx.config.dataDir,
     );
 
-    const wrappedOnOutput = onOutput
-      ? async (output: ContainerEvent) => {
-          if (
-            (output.type === 'state' ||
-              output.type === 'result' ||
-              output.type === 'error') &&
-            output.newSessionId
-          ) {
-            this.ctx.sessions[group.folder] = output.newSessionId;
-            this.ctx.db.setSession(group.folder, output.newSessionId);
-          }
-          await onOutput(output);
+    const wrappedOnOutput = async (output: ContainerEvent) => {
+      if (
+        (output.type === 'state' ||
+          output.type === 'result' ||
+          output.type === 'error') &&
+        output.newSessionId
+      ) {
+        this.ctx.sessions[group.folder] = output.newSessionId;
+        this.ctx.db.setSession(group.folder, output.newSessionId);
+      }
+
+      if (output.type === 'token_usage') {
+        try {
+          this.ctx.db.recordTokenUsage(output.usage);
+        } catch (err) {
+          logger.warn(
+            { group: group.name, err },
+            'Failed to record token usage',
+          );
         }
-      : undefined;
+      }
+
+      await onOutput?.(output);
+    };
 
     try {
       const actionAuth = this.ctx.actionsHttp.mintContainerToken(
