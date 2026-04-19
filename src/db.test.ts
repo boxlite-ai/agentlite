@@ -527,3 +527,125 @@ describe('registered group isMain', () => {
     expect(group.isMain).toBeUndefined();
   });
 });
+
+describe('tool_usage', () => {
+  it('records usage and returns correct aggregates', () => {
+    db.recordToolUsage({
+      groupJid: 'group@g.us',
+      toolName: 'Bash',
+      success: true,
+      durationMs: 120,
+      ts: '2026-04-19T00:00:00.000Z',
+    });
+
+    expect(db.getToolUsageSummary()).toEqual([
+      {
+        tool_name: 'Bash',
+        call_count: 1,
+        success_count: 1,
+        success_rate: 1,
+        avg_duration_ms: 120,
+      },
+    ]);
+  });
+
+  it('computes mixed success and failure rates correctly', () => {
+    db.recordToolUsage({
+      groupJid: 'group@g.us',
+      toolName: 'Bash',
+      success: true,
+      durationMs: 100,
+      ts: '2026-04-19T00:00:00.000Z',
+    });
+    db.recordToolUsage({
+      groupJid: 'group@g.us',
+      toolName: 'Bash',
+      success: true,
+      durationMs: 110,
+      ts: '2026-04-19T00:01:00.000Z',
+    });
+    db.recordToolUsage({
+      groupJid: 'group@g.us',
+      toolName: 'Bash',
+      success: true,
+      durationMs: 120,
+      ts: '2026-04-19T00:02:00.000Z',
+    });
+    db.recordToolUsage({
+      groupJid: 'group@g.us',
+      toolName: 'Bash',
+      success: false,
+      errorMessage: 'boom',
+      durationMs: 130,
+      ts: '2026-04-19T00:03:00.000Z',
+    });
+
+    expect(db.getToolUsageSummary()).toEqual([
+      {
+        tool_name: 'Bash',
+        call_count: 4,
+        success_count: 3,
+        success_rate: 0.75,
+        avg_duration_ms: 115,
+      },
+    ]);
+  });
+
+  it('applies since filter to exclude older rows', () => {
+    db.recordToolUsage({
+      groupJid: 'group@g.us',
+      toolName: 'Read',
+      success: true,
+      durationMs: 50,
+      ts: '2026-04-18T23:00:00.000Z',
+    });
+    db.recordToolUsage({
+      groupJid: 'group@g.us',
+      toolName: 'Read',
+      success: false,
+      errorMessage: 'timeout',
+      durationMs: 150,
+      ts: '2026-04-19T01:00:00.000Z',
+    });
+
+    expect(
+      db.getToolUsageSummary({ since: '2026-04-19T00:00:00.000Z' }),
+    ).toEqual([
+      {
+        tool_name: 'Read',
+        call_count: 1,
+        success_count: 0,
+        success_rate: 0,
+        avg_duration_ms: 150,
+      },
+    ]);
+  });
+
+  it('filters to a specific tool name', () => {
+    db.recordToolUsage({
+      groupJid: 'group@g.us',
+      toolName: 'Read',
+      success: true,
+      durationMs: 80,
+      ts: '2026-04-19T00:00:00.000Z',
+    });
+    db.recordToolUsage({
+      groupJid: 'group@g.us',
+      toolName: 'Bash',
+      success: false,
+      errorMessage: 'permission denied',
+      durationMs: 180,
+      ts: '2026-04-19T00:01:00.000Z',
+    });
+
+    expect(db.getToolUsageSummary({ toolName: 'Read' })).toEqual([
+      {
+        tool_name: 'Read',
+        call_count: 1,
+        success_count: 1,
+        success_rate: 1,
+        avg_duration_ms: 80,
+      },
+    ]);
+  });
+});

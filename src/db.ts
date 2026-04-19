@@ -82,6 +82,19 @@ export function createSchema(
       container_config TEXT,
       requires_trigger INTEGER DEFAULT 1
     );
+    CREATE TABLE IF NOT EXISTS tool_usage (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      group_jid     TEXT    NOT NULL,
+      session_id    TEXT,
+      tool_name     TEXT    NOT NULL,
+      success       INTEGER NOT NULL DEFAULT 1,
+      error_message TEXT,
+      duration_ms   INTEGER NOT NULL,
+      ts            TEXT    NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_tool_usage_ts        ON tool_usage(ts);
+    CREATE INDEX IF NOT EXISTS idx_tool_usage_tool_name ON tool_usage(tool_name);
+    CREATE INDEX IF NOT EXISTS idx_tool_usage_group_jid ON tool_usage(group_jid);
 
   `);
 
@@ -521,6 +534,73 @@ export class AgentDb {
         log.result,
         log.error,
       );
+  }
+
+  recordToolUsage(entry: {
+    groupJid: string;
+    sessionId?: string;
+    toolName: string;
+    success: boolean;
+    errorMessage?: string;
+    durationMs: number;
+    ts: string;
+  }): void {
+    this.db
+      .prepare(
+        `
+    INSERT INTO tool_usage (group_jid, session_id, tool_name, success, error_message, duration_ms, ts)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `,
+      )
+      .run(
+        entry.groupJid,
+        entry.sessionId ?? null,
+        entry.toolName,
+        entry.success ? 1 : 0,
+        entry.errorMessage ?? null,
+        entry.durationMs,
+        entry.ts,
+      );
+  }
+
+  getToolUsageSummary(opts?: {
+    since?: string;
+    toolName?: string;
+  }): Array<{
+    tool_name: string;
+    call_count: number;
+    success_count: number;
+    success_rate: number;
+    avg_duration_ms: number;
+  }> {
+    return this.db
+      .prepare(
+        `
+    SELECT
+      tool_name,
+      COUNT(*)                                   AS call_count,
+      SUM(success)                               AS success_count,
+      CAST(SUM(success) AS REAL) / COUNT(*)      AS success_rate,
+      CAST(SUM(duration_ms) AS REAL) / COUNT(*)  AS avg_duration_ms
+    FROM tool_usage
+    WHERE (? IS NULL OR ts >= ?)
+      AND (? IS NULL OR tool_name = ?)
+    GROUP BY tool_name
+    ORDER BY call_count DESC
+  `,
+      )
+      .all(
+        opts?.since ?? null,
+        opts?.since ?? null,
+        opts?.toolName ?? null,
+        opts?.toolName ?? null,
+      ) as Array<{
+      tool_name: string;
+      call_count: number;
+      success_count: number;
+      success_rate: number;
+      avg_duration_ms: number;
+    }>;
   }
 
   // --- Router state ---

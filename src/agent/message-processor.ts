@@ -157,6 +157,10 @@ export class MessageProcessor {
     await channel.setTyping?.(chatJid, true);
     let hadError = false;
     let outputSentToUser = false;
+    const pendingToolCalls = new Map<
+      string,
+      { toolName: string; startedAt: number }
+    >();
 
     const output = await this.runAgent(
       group,
@@ -226,6 +230,10 @@ export class MessageProcessor {
           if (event.sdkType === 'assistant' && msg?.message?.content) {
             for (const block of msg.message.content) {
               if (block.type === 'tool_use' && block.name && block.id) {
+                pendingToolCalls.set(block.id, {
+                  toolName: block.name,
+                  startedAt: Date.now(),
+                });
                 this.ctx.emit('run.tool', {
                   agentId: this.ctx.id,
                   jid: chatJid,
@@ -239,6 +247,40 @@ export class MessageProcessor {
               }
             }
             resetIdleTimer();
+          }
+
+          if (event.sdkType === 'user' && msg?.message?.content) {
+            for (const block of msg.message.content) {
+              if (block.type === 'tool_result' && block.tool_use_id) {
+                const pending = pendingToolCalls.get(block.tool_use_id);
+                if (pending) {
+                  pendingToolCalls.delete(block.tool_use_id);
+                  const durationMs = Date.now() - pending.startedAt;
+                  const isError = block.is_error === true;
+                  let errorMessage: string | undefined;
+                  if (isError && block.content) {
+                    if (typeof block.content === 'string') {
+                      errorMessage = block.content.slice(0, 500);
+                    } else if (Array.isArray(block.content)) {
+                      errorMessage = block.content
+                        .map((c: { text?: string }) => c.text ?? '')
+                        .join('')
+                        .slice(0, 500);
+                    }
+                  }
+                  this.ctx.db.recordToolUsage({
+                    groupJid: chatJid,
+                    sessionId: undefined,
+                    toolName: pending.toolName,
+                    success: !isError,
+                    errorMessage,
+                    durationMs,
+                    ts: now,
+                  });
+                  this.checkToolErrorRateAlert(chatJid, pending.toolName);
+                }
+              }
+            }
           }
 
           if (event.sdkType === 'tool_progress') {
@@ -325,6 +367,26 @@ export class MessageProcessor {
     }
 
     return true;
+  }
+
+  private checkToolErrorRateAlert(chatJid: string, toolName: string): void {
+    const sinceHour = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const rows = this.ctx.db.getToolUsageSummary({ since: sinceHour, toolName });
+    const row = rows[0];
+    if (row && row.call_count >= 5 && row.success_rate < 0.8) {
+      logger.warn(
+        { toolName, callCount: row.call_count, successRate: row.success_rate },
+        'Tool error rate exceeded 20% in the last hour',
+      );
+      this.ctx.emit('run.tool_alert', {
+        agentId: this.ctx.id,
+        jid: chatJid,
+        toolName,
+        callCount: row.call_count,
+        successRate: row.success_rate,
+        timestamp: new Date().toISOString(),
+      });
+    }
   }
 
   /** Execute agent in a container for the given group. */

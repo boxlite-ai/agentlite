@@ -38,7 +38,7 @@ import { AgentDb, initDatabase } from '../db.js';
 import { resolveMountAllowlist } from '../mount-security.js';
 import { GroupQueue } from '../group-queue.js';
 import { writeGroupsSnapshot } from '../container-runner.js';
-import type { ZodRawShape } from 'zod';
+import { z, type ZodRawShape } from 'zod';
 
 import { startIpcWatcher } from '../ipc.js';
 import { ActionsHttp } from './actions-http.js';
@@ -461,6 +461,23 @@ export class AgentImpl
         'Channels connected',
       );
     }
+
+    this.actions.set('tool_usage_summary', {
+      description:
+        'Returns per-tool call count, success rate, and average duration. ' +
+        'Optionally filter by since (ISO timestamp) and tool_name.',
+      inputSchema: {
+        since: z.string().optional().describe('ISO timestamp lower bound'),
+        tool_name: z.string().optional().describe('Filter to a specific tool'),
+      },
+      handler: async (payload) => {
+        const rows = this.db.getToolUsageSummary({
+          since: payload.since as string | undefined,
+          toolName: payload.tool_name as string | undefined,
+        });
+        return { summary: rows };
+      },
+    });
 
     await this.actionsHttp.start();
     this.startSubsystems();
