@@ -1,7 +1,12 @@
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { z } from 'zod';
 
 import { ActionsHttp } from './actions-http.js';
+import type { AgentStatus } from './status-writer.js';
 import type { ActionContext, RegisteredAction } from '../api/action.js';
 
 // ─── Test helpers ──────────────────────────────────────────────────
@@ -50,10 +55,24 @@ describe('ActionsHttp', () => {
   let server: ActionsHttp;
   let baseUrl: string;
   let token: string;
+  let dataDir: string;
+
+  function readStatus(): AgentStatus {
+    return JSON.parse(
+      fs.readFileSync(path.join(dataDir, 'ipc', 'status.json'), 'utf8'),
+    ) as AgentStatus;
+  }
 
   beforeEach(async () => {
     actions = new Map();
-    server = new ActionsHttp(() => actions);
+    dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentlite-actions-http-'));
+    server = new ActionsHttp(() => actions, {
+      agentId: 'agent-1',
+      agentName: 'Observer',
+      dataDir,
+      sessionId: 'session-1',
+      sessionStartedAt: '2026-04-19T10:00:00.000Z',
+    });
     const info = await server.start();
     if (!info) throw new Error('No LAN IP available for tests');
     baseUrl = info.url;
@@ -64,6 +83,7 @@ describe('ActionsHttp', () => {
 
   afterEach(async () => {
     await server.stop();
+    fs.rmSync(dataDir, { force: true, recursive: true });
   });
 
   describe('auth', () => {
@@ -95,6 +115,120 @@ describe('ActionsHttp', () => {
       const res = await post(baseUrl, '/call', {}, token);
       // /call with no name → not found for "unknown action: "
       expect(res.status).toBe(404);
+    });
+  });
+
+  describe('status instrumentation', () => {
+    it('writes an idle status file when the server starts', () => {
+      expect(readStatus()).toEqual({
+        schemaVersion: 1,
+        updatedAt: expect.any(String),
+        agentId: 'agent-1',
+        agentName: 'Observer',
+        status: 'idle',
+        phase: 'idle',
+        currentTool: null,
+        toolArgsSummary: null,
+        lastToolDurationMs: null,
+        turnCount: 0,
+        workItemId: null,
+        workItemTitle: null,
+        sessionId: 'session-1',
+        sessionStartedAt: '2026-04-19T10:00:00.000Z',
+      });
+    });
+
+    it('writes tool start and completion status around a successful action call', async () => {
+      let statusSeenInsideHandler: AgentStatus | null = null;
+      actions.set(
+        'workflow_items_move',
+        makeAction({
+          inputSchema: { itemId: z.string() },
+          handler: async () => {
+            statusSeenInsideHandler = readStatus();
+            return { ok: true };
+          },
+        }),
+      );
+
+      const res = await post(
+        baseUrl,
+        '/call',
+        { name: 'workflow_items_move', payload: { itemId: 'item-42' } },
+        token,
+      );
+
+      expect(res.status).toBe(200);
+      expect(statusSeenInsideHandler).toEqual({
+        schemaVersion: 1,
+        updatedAt: expect.any(String),
+        agentId: 'agent-1',
+        agentName: 'Observer',
+        status: 'working',
+        phase: 'tool_call_start',
+        currentTool: 'workflow_items_move',
+        toolArgsSummary: 'workflow_items_move',
+        lastToolDurationMs: null,
+        turnCount: 1,
+        workItemId: 'item-42',
+        workItemTitle: null,
+        sessionId: 'session-1',
+        sessionStartedAt: '2026-04-19T10:00:00.000Z',
+      });
+
+      expect(readStatus()).toEqual({
+        schemaVersion: 1,
+        updatedAt: expect.any(String),
+        agentId: 'agent-1',
+        agentName: 'Observer',
+        status: 'idle',
+        phase: 'tool_call_done',
+        currentTool: null,
+        toolArgsSummary: 'workflow_items_move',
+        lastToolDurationMs: expect.any(Number),
+        turnCount: 1,
+        workItemId: 'item-42',
+        workItemTitle: null,
+        sessionId: 'session-1',
+        sessionStartedAt: '2026-04-19T10:00:00.000Z',
+      });
+    });
+
+    it('writes an error status when an action handler throws', async () => {
+      actions.set(
+        'workflow_tasks_update',
+        makeAction({
+          inputSchema: { itemId: z.string() },
+          handler: async () => {
+            throw new Error('boom');
+          },
+        }),
+      );
+
+      const res = await post(
+        baseUrl,
+        '/call',
+        { name: 'workflow_tasks_update', payload: { itemId: 'item-43' } },
+        token,
+      );
+
+      expect(res.status).toBe(500);
+      expect(readStatus()).toEqual({
+        schemaVersion: 1,
+        updatedAt: expect.any(String),
+        agentId: 'agent-1',
+        agentName: 'Observer',
+        status: 'error',
+        phase: 'error',
+        currentTool: null,
+        toolArgsSummary: 'workflow_tasks_update',
+        lastToolDurationMs: expect.any(Number),
+        turnCount: 1,
+        workItemId: 'item-43',
+        workItemTitle: null,
+        sessionId: 'session-1',
+        sessionStartedAt: '2026-04-19T10:00:00.000Z',
+      });
     });
   });
 

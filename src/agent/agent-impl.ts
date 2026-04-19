@@ -67,6 +67,31 @@ export { type Agent };
 
 // ─── Implementation ─────────────────────────────────────────────────
 
+const signalAwareAgents = new Set<{
+  handleProcessSignal: (signal: NodeJS.Signals) => void;
+}>();
+let processSignalHandlersInstalled = false;
+
+function notifyAgentsOfProcessSignal(signal: NodeJS.Signals): void {
+  for (const agent of signalAwareAgents) {
+    agent.handleProcessSignal(signal);
+  }
+}
+
+function ensureProcessSignalHandlers(): void {
+  if (processSignalHandlersInstalled) {
+    return;
+  }
+
+  process.on('SIGTERM', () => {
+    notifyAgentsOfProcessSignal('SIGTERM');
+  });
+  process.on('SIGINT', () => {
+    notifyAgentsOfProcessSignal('SIGINT');
+  });
+  processSignalHandlersInstalled = true;
+}
+
 export class AgentImpl
   extends (EventEmitter as { new (): TypedEmitter<AgentEvents> })
   implements Agent, AgentContext
@@ -104,6 +129,7 @@ export class AgentImpl
   private actions = new Map<string, RegisteredAction>();
   private readonly sessionId: string;
   private readonly sessionStartedAt: string;
+  private fatalSignal: NodeJS.Signals | null = null;
   readonly actionsHttp: ActionsHttp;
   /** Outbound ACP (Zed Agent Client Protocol) client; null unless opts.acp.peers is set. */
   acpClient: AcpOutboundClient | null = null;
@@ -435,11 +461,15 @@ export class AgentImpl
     if (this._started) throw new Error(`Agent "${this.name}" already running`);
     this._started = true;
     this._stopping = false;
+    this.fatalSignal = null;
+    ensureProcessSignalHandlers();
+    signalAwareAgents.add(this);
 
     // Ensure directories exist
     fs.mkdirSync(this.config.storeDir, { recursive: true });
     fs.mkdirSync(this.config.groupsDir, { recursive: true });
     fs.mkdirSync(this.config.dataDir, { recursive: true });
+    fs.mkdirSync(path.join(this.config.dataDir, 'ipc'), { recursive: true });
 
     this.groupMgr.copyGroupTemplates();
     this.groupMgr.syncAgentCustomizations();
@@ -480,10 +510,13 @@ export class AgentImpl
   }
 
   async stop(): Promise<void> {
+    signalAwareAgents.delete(this);
     this._stopping = true;
     this.ipcHandle?.stop();
     this.schedulerHandle?.stop();
-    this.actionsHttp.writeTerminalStatus('done');
+    if (!this.fatalSignal) {
+      this.actionsHttp.writeTerminalStatus('done');
+    }
     await this.actionsHttp.stop();
     await this.messageMgr.waitForStop();
     if (this.acpClient) {
@@ -495,6 +528,16 @@ export class AgentImpl
     }
     this._started = false;
     this.emit('stopped');
+  }
+
+  handleProcessSignal(signal: NodeJS.Signals): void {
+    if (this.fatalSignal) {
+      return;
+    }
+
+    this.fatalSignal = signal;
+    logger.warn({ agent: this.name, signal }, 'Agent process received a shutdown signal');
+    this.actionsHttp.writeTerminalStatus('error');
   }
 
   // ─── Subsystem wiring ───────────────────────────────────────────
