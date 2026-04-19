@@ -103,21 +103,10 @@ export interface ContainerErrorEvent {
   maxRetries?: number;
 }
 
-export interface ContainerRetryEvent {
-  type: 'retry';
-  kind: 'rate_limit' | 'transient';
-  error: string;
-  delayMs: number;
-  attempt: number;
-  maxRetries: number;
-  newSessionId?: string;
-  statusCode?: number;
-}
-
 /**
  * Raw SDK message forwarded from the container.
- * The container is a dumb pipe — every SDK message is forwarded as-is.
- * All 21 SDK message types flow through this single event.
+ * The container forwards every SDK message as-is and may also emit
+ * synthetic runtime notices through the same envelope.
  */
 export interface ContainerSdkMessageEvent {
   type: 'sdk_message';
@@ -134,7 +123,6 @@ export type ContainerEvent =
   | ContainerStateEvent
   | ContainerResultEvent
   | ContainerErrorEvent
-  | ContainerRetryEvent
   | ContainerSdkMessageEvent;
 
 export interface ContainerOutput {

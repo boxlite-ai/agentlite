@@ -202,22 +202,6 @@ export class MessageProcessor {
           return;
         }
 
-        if (event.type === 'retry') {
-          this.ctx.emit('run.retry', {
-            agentId: this.ctx.id,
-            jid: chatJid,
-            kind: event.kind,
-            attempt: event.attempt,
-            maxRetries: event.maxRetries,
-            delayMs: event.delayMs,
-            delaySeconds: Math.ceil(event.delayMs / 1000),
-            statusCode: event.statusCode,
-            error: event.error,
-            timestamp: new Date().toISOString(),
-          });
-          return;
-        }
-
         if (event.type === 'error') {
           hadError = true;
           this.ctx.emit('run.error', {
@@ -251,6 +235,18 @@ export class MessageProcessor {
           });
 
           // Derive curated convenience events from SDK messages
+          if (event.sdkType === 'rate_limit_retry') {
+            this.ctx.emit('run.rate_limited', {
+              agentId: this.ctx.id,
+              jid: chatJid,
+              attempt: msg.attempt,
+              maxRetries: msg.maxRetries,
+              retryAfterMs: msg.retryAfterMs,
+              statusCode: msg.statusCode,
+              timestamp: now,
+            });
+          }
+
           if (event.sdkType === 'assistant' && msg?.message?.content) {
             for (const block of msg.message.content) {
               if (block.type === 'tool_use' && block.name && block.id) {

@@ -9,7 +9,7 @@ export interface AgentEvents extends Record<string, any[]> {
   'message.in': [payload: MessageInEvent];
   'message.out': [payload: MessageOutEvent];
   'run.state': [payload: RunStateEvent];
-  'run.retry': [payload: RunRetryEvent];
+  'run.rate_limited': [payload: RunRateLimitedEvent];
   'run.error': [payload: RunErrorEvent];
   'run.sdk_message': [payload: RunSdkMessageEvent];
   'run.tool': [payload: RunToolEvent];
@@ -87,26 +87,20 @@ export interface RunStateEvent {
   exitCode?: number;
 }
 
-/** Claude API retry scheduled after a transient or rate-limit failure. */
-export interface RunRetryEvent {
+/** Claude API retry scheduled after a rate-limit or transient failure. */
+export interface RunRateLimitedEvent {
   /** Stable agent identifier. */
   agentId: string;
   /** Group/chat identifier. */
   jid: string;
-  /** Retry category. */
-  kind: 'rate_limit' | 'transient';
   /** Retry attempt number, starting at 1. */
   attempt: number;
   /** Maximum retries configured for the group. */
   maxRetries: number;
   /** Backoff delay in milliseconds. */
-  delayMs: number;
-  /** Backoff delay rounded up to whole seconds for UI copy. */
-  delaySeconds: number;
+  retryAfterMs: number;
   /** Best-effort upstream status code, when available. */
   statusCode?: number;
-  /** Error message that triggered the retry. */
-  error: string;
   /** ISO timestamp. */
   timestamp: string;
 }
@@ -137,11 +131,12 @@ export interface RunErrorEvent {
 
 /**
  * Raw SDK message from the agent runtime.
- * Exposes all 21 SDK message types — consumers can filter by sdkType/sdkSubtype.
+ * Exposes all SDK messages plus synthetic retry notices emitted through the
+ * same envelope — consumers can filter by sdkType/sdkSubtype.
  *
  * Common sdkType values: 'assistant', 'result', 'system', 'stream_event',
  * 'tool_progress', 'tool_use_summary', 'auth_status', 'rate_limit_event',
- * 'prompt_suggestion'.
+ * 'prompt_suggestion', 'rate_limit_retry'.
  *
  * Common sdkSubtype values (when sdkType='system'): 'init', 'status',
  * 'task_started', 'task_progress', 'task_notification', 'compact_boundary',

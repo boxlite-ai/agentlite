@@ -77,20 +77,9 @@ interface ContainerErrorOutput {
   maxRetries?: number;
 }
 
-interface ContainerRetryOutput {
-  type: 'retry';
-  kind: 'rate_limit' | 'transient';
-  error: string;
-  delayMs: number;
-  attempt: number;
-  maxRetries: number;
-  newSessionId?: string;
-  statusCode?: number;
-}
-
 // ── Raw SDK message passthrough ──────────────────────────────────
 
-/** Every SDK message forwarded as-is. The container is a dumb pipe. */
+/** Every SDK message is forwarded as-is, plus synthetic runtime notices. */
 interface ContainerSdkMessageOutput {
   type: 'sdk_message';
   /** Top-level SDK message type (e.g. 'assistant', 'result', 'system', 'tool_progress', 'stream_event'). */
@@ -105,7 +94,6 @@ type ContainerOutput =
   | ContainerStateOutput
   | ContainerResultOutput
   | ContainerErrorOutput
-  | ContainerRetryOutput
   | ContainerSdkMessageOutput;
 
 interface SessionEntry {
@@ -710,6 +698,7 @@ async function runQuery(
   closedDuringQuery: boolean;
 }> {
   let currentSessionId = sessionId;
+  let currentResumeAt = resumeAt;
 
   writeOutput({
     type: 'state',
@@ -727,7 +716,7 @@ async function runQuery(
           mcpServerPath,
           containerInput,
           sdkEnv,
-          resumeAt,
+          currentResumeAt,
         );
         if (result.newSessionId) {
           currentSessionId = result.newSessionId;
@@ -737,6 +726,9 @@ async function runQuery(
         if (err instanceof QueryAttemptError && err.newSessionId) {
           currentSessionId = err.newSessionId;
         }
+        if (err instanceof QueryAttemptError && err.lastAssistantUuid) {
+          currentResumeAt = err.lastAssistantUuid;
+        }
         throw err;
       }
     },
@@ -744,14 +736,14 @@ async function runQuery(
       maxRetries: containerInput.maxRetries,
       onRetry: async (retry) => {
         writeOutput({
-          type: 'retry',
-          kind: retry.kind,
-          error: retry.message,
-          delayMs: retry.delayMs,
-          attempt: retry.attempt,
-          maxRetries: retry.maxRetries,
-          newSessionId: currentSessionId,
-          statusCode: retry.statusCode,
+          type: 'sdk_message',
+          sdkType: 'rate_limit_retry',
+          message: {
+            attempt: retry.attempt,
+            maxRetries: retry.maxRetries,
+            retryAfterMs: retry.retryAfterMs,
+            statusCode: retry.statusCode,
+          },
         });
       },
     },

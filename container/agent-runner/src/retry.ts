@@ -13,7 +13,7 @@ export interface RetryDescriptor {
 export interface RetryAttempt {
   attempt: number;
   maxRetries: number;
-  delayMs: number;
+  retryAfterMs: number;
   kind: RetryKind;
   message: string;
   statusCode?: number;
@@ -58,11 +58,6 @@ function extractStatusCode(error: unknown): number | undefined {
   return undefined;
 }
 
-function extractName(error: unknown): string {
-  const record = asObject(error);
-  return typeof record?.name === 'string' ? record.name : '';
-}
-
 export function getErrorMessage(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
@@ -92,13 +87,8 @@ export function getRetryDescriptor(error: unknown): RetryDescriptor | null {
 
   const statusCode = extractStatusCode(error);
   const message = getErrorMessage(error);
-  const name = extractName(error);
 
-  if (
-    statusCode === 429 ||
-    name === 'RateLimitError' ||
-    (!statusCode && /rate limit|too many requests/i.test(message))
-  ) {
+  if (statusCode === 429) {
     return {
       kind: 'rate_limit',
       message,
@@ -106,15 +96,7 @@ export function getRetryDescriptor(error: unknown): RetryDescriptor | null {
     };
   }
 
-  if (
-    statusCode === 500 ||
-    statusCode === 503 ||
-    (!statusCode &&
-      /service unavailable|internal server error|temporar(?:y|ily) unavailable/i.test(
-        message,
-      )) ||
-    /InternalServerError|ServiceUnavailableError/i.test(name)
-  ) {
+  if (statusCode === 500 || statusCode === 503) {
     return {
       kind: 'transient',
       message,
@@ -135,20 +117,41 @@ export function getRetryDelayMs(
   attempt: number,
   random: () => number = Math.random,
 ): number {
-  const exponent = Math.max(0, attempt - 1);
+  const exponent = Math.max(0, attempt);
   const cappedBase = Math.min(
     RETRY_MAX_DELAY_MS,
     RETRY_BASE_DELAY_MS * 2 ** exponent,
   );
   const jitterFactor = Math.min(1, Math.max(0, random()));
-  const jitterMs = Math.floor(cappedBase * jitterFactor);
-  return Math.min(RETRY_MAX_DELAY_MS, cappedBase + jitterMs);
+  return Math.floor(cappedBase * (1 + jitterFactor * 0.3));
 }
 
 export async function sleepMs(ms: number): Promise<void> {
   await new Promise<void>((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+function getRetriesExhaustedMessage(
+  retry: RetryDescriptor,
+  maxRetries: number,
+): string {
+  const statusSuffix =
+    retry.statusCode !== undefined ? ` (status ${retry.statusCode})` : '';
+  return `Rate limit / transient error — retries exhausted after ${maxRetries} retries${statusSuffix}: `;
+}
+
+function toRetriesExhaustedError(
+  error: unknown,
+  retry: RetryDescriptor,
+  maxRetries: number,
+): Error {
+  const message = `${getRetriesExhaustedMessage(retry, maxRetries)}${getErrorMessage(error)}`;
+  if (error instanceof Error) {
+    error.message = message;
+    return error;
+  }
+  return new Error(message, { cause: error });
 }
 
 export async function withRetry<T>(
@@ -169,19 +172,22 @@ export async function withRetry<T>(
       return await operation(attempt);
     } catch (error) {
       const retry = getRetryDescriptor(error);
-      if (!retry || attempt >= maxRetries) {
+      if (!retry) {
         throw error;
+      }
+      if (attempt >= maxRetries) {
+        throw toRetriesExhaustedError(error, retry, maxRetries);
       }
 
       const retryAttempt = attempt + 1;
-      const delayMs = getRetryDelayMs(retryAttempt, random);
+      const retryAfterMs = getRetryDelayMs(attempt, random);
       await opts?.onRetry?.({
         ...retry,
         attempt: retryAttempt,
         maxRetries,
-        delayMs,
+        retryAfterMs,
       });
-      await sleep(delayMs);
+      await sleep(retryAfterMs);
     }
   }
 }

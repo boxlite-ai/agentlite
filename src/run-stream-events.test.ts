@@ -29,7 +29,7 @@ import { buildRuntimeConfig } from './runtime-config.js';
 import { runContainerAgent } from './container-runner.js';
 import type {
   RunErrorEvent,
-  RunRetryEvent,
+  RunRateLimitedEvent,
   RunSdkMessageEvent,
   RunStatusEvent,
   RunSubagentEvent,
@@ -605,7 +605,7 @@ describe('run.status (derived from sdk_message)', () => {
   });
 });
 
-describe('run.retry (derived from container retry events)', () => {
+describe('run.rate_limited (derived from rate_limit_retry sdk_message)', () => {
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentlite-stream-'));
     db = _initTestDatabase();
@@ -625,15 +625,14 @@ describe('run.retry (derived from container retry events)', () => {
 
     vi.mocked(runContainerAgent).mockImplementation(
       async (_group, _input, _rc, _onProcess, onOutput) => {
-        await onOutput?.({
-          type: 'retry',
-          kind: 'rate_limit',
-          error: '429 rate limit',
-          delayMs: 2_500,
-          attempt: 2,
-          maxRetries: 5,
-          statusCode: 429,
-        });
+        await onOutput?.(
+          sdkMsg('rate_limit_retry', {
+            attempt: 2,
+            maxRetries: 5,
+            retryAfterMs: 2_500,
+            statusCode: 429,
+          }),
+        );
         await onOutput?.({
           type: 'state',
           state: 'stopped',
@@ -644,8 +643,8 @@ describe('run.retry (derived from container retry events)', () => {
       },
     );
 
-    const events: RunRetryEvent[] = [];
-    agent.on('run.retry', (evt) => events.push(evt));
+    const events: RunRateLimitedEvent[] = [];
+    agent.on('run.rate_limited', (evt) => events.push(evt));
 
     await agent.processGroupMessages('mock:stream');
 
@@ -653,13 +652,10 @@ describe('run.retry (derived from container retry events)', () => {
     expect(events[0]).toMatchObject({
       agentId: agent.id,
       jid: 'mock:stream',
-      kind: 'rate_limit',
       attempt: 2,
       maxRetries: 5,
-      delayMs: 2_500,
-      delaySeconds: 3,
+      retryAfterMs: 2_500,
       statusCode: 429,
-      error: '429 rate limit',
     });
   });
 });
