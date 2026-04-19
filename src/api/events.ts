@@ -9,6 +9,8 @@ export interface AgentEvents extends Record<string, any[]> {
   'message.in': [payload: MessageInEvent];
   'message.out': [payload: MessageOutEvent];
   'run.state': [payload: RunStateEvent];
+  'run.rate_limited': [payload: RunRateLimitedEvent];
+  'run.error': [payload: RunErrorEvent];
   'run.sdk_message': [payload: RunSdkMessageEvent];
   'run.tool': [payload: RunToolEvent];
   'run.tool_progress': [payload: RunToolProgressEvent];
@@ -85,13 +87,56 @@ export interface RunStateEvent {
   exitCode?: number;
 }
 
+/** Claude API retry scheduled after an upstream rate limit. */
+export interface RunRateLimitedEvent {
+  /** Stable agent identifier. */
+  agentId: string;
+  /** Group/chat identifier. */
+  jid: string;
+  /** Retry attempt number, starting at 1. */
+  attempt: number;
+  /** Maximum retries configured for the group. */
+  maxRetries: number;
+  /** Backoff delay in milliseconds. */
+  retryAfterMs: number;
+  /** Upstream HTTP status code. */
+  statusCode: number;
+  /** ISO timestamp. */
+  timestamp: string;
+}
+
+/** Runtime error surfaced by the container or host. */
+export interface RunErrorEvent {
+  /** Stable agent identifier. */
+  agentId: string;
+  /** Group/chat identifier. */
+  jid: string;
+  /** Error category. */
+  kind: 'rate_limit' | 'transient' | 'runtime';
+  /** Error message. */
+  error: string;
+  /** Whether the runtime considered this retryable. */
+  retryable?: boolean;
+  /** Whether the configured retries were exhausted. */
+  exhaustedRetries?: boolean;
+  /** Number of retries already attempted. */
+  retriesAttempted?: number;
+  /** Maximum retries configured for the group. */
+  maxRetries?: number;
+  /** Best-effort upstream status code, when available. */
+  statusCode?: number;
+  /** ISO timestamp. */
+  timestamp: string;
+}
+
 /**
  * Raw SDK message from the agent runtime.
- * Exposes all 21 SDK message types — consumers can filter by sdkType/sdkSubtype.
+ * Exposes all SDK messages plus synthetic retry notices emitted through the
+ * same envelope — consumers can filter by sdkType/sdkSubtype.
  *
  * Common sdkType values: 'assistant', 'result', 'system', 'stream_event',
  * 'tool_progress', 'tool_use_summary', 'auth_status', 'rate_limit_event',
- * 'prompt_suggestion'.
+ * 'prompt_suggestion', 'rate_limit_retry'.
  *
  * Common sdkSubtype values (when sdkType='system'): 'init', 'status',
  * 'task_started', 'task_progress', 'task_notification', 'compact_boundary',

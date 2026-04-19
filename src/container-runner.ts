@@ -43,6 +43,7 @@ export interface ContainerInput {
   isMain: boolean;
   isScheduledTask?: boolean;
   assistantName?: string;
+  maxRetries?: number;
   /** Agent id used to scope runtime box names. */
   agentId?: string;
   workDir?: string;
@@ -94,12 +95,18 @@ export interface ContainerErrorEvent {
   type: 'error';
   error: string;
   newSessionId?: string;
+  kind?: 'rate_limit' | 'transient' | 'runtime';
+  statusCode?: number;
+  retryable?: boolean;
+  exhaustedRetries?: boolean;
+  retriesAttempted?: number;
+  maxRetries?: number;
 }
 
 /**
  * Raw SDK message forwarded from the container.
- * The container is a dumb pipe — every SDK message is forwarded as-is.
- * All 21 SDK message types flow through this single event.
+ * The container forwards every SDK message as-is and may also emit
+ * synthetic runtime notices through the same envelope.
  */
 export interface ContainerSdkMessageEvent {
   type: 'sdk_message';
@@ -525,6 +532,26 @@ export async function runContainerAgent(
   const logsDir = path.join(groupDir, 'logs');
   fs.mkdirSync(logsDir, { recursive: true });
 
+  let newSessionId: string | undefined;
+  let outputChain = Promise.resolve();
+  let lastLifecycleState: ContainerState | null = null;
+  let hasStructuredError = false;
+
+  const forwardEvent = (event: ContainerEvent): void => {
+    if ('newSessionId' in event && event.newSessionId) {
+      newSessionId = event.newSessionId;
+    }
+    if (event.type === 'state') {
+      lastLifecycleState = event.state;
+    }
+    if (event.type === 'error') {
+      hasStructuredError = true;
+    }
+    if (onOutput) {
+      outputChain = outputChain.then(() => onOutput(event));
+    }
+  };
+
   // Create box, run entrypoint, write stdin
   const spawnResult = await spawnBox(
     group.name,
@@ -535,16 +562,24 @@ export async function runContainerAgent(
     JSON.stringify(input),
     rc,
   );
-  if ('status' in spawnResult) return spawnResult; // error
+  if ('status' in spawnResult) {
+    if (spawnResult.status === 'error') {
+      forwardEvent({
+        type: 'error',
+        error: spawnResult.error,
+        kind: 'runtime',
+        retryable: false,
+      });
+      await outputChain;
+    }
+    return spawnResult;
+  }
   const { box, execution } = spawnResult;
 
   onProcess(containerName, containerName);
 
   // Stream stdout and stderr, parse output markers
   let parseBuffer = '';
-  let newSessionId: string | undefined;
-  let outputChain = Promise.resolve();
-  let lastLifecycleState: ContainerState | null = null;
   let stdout = '';
   let stderr = '';
   let stdoutTruncated = false;
@@ -615,21 +650,9 @@ export async function runContainerAgent(
 
             try {
               const parsed: ContainerEvent = JSON.parse(jsonStr);
-              if (
-                (parsed.type === 'state' ||
-                  parsed.type === 'result' ||
-                  parsed.type === 'error') &&
-                parsed.newSessionId
-              ) {
-                newSessionId = parsed.newSessionId;
-              }
-              if (parsed.type === 'state') {
-                lastLifecycleState = parsed.state;
-              }
               // Activity detected — reset the hard timeout
               resetTimeout();
-              // Call onOutput for all structured stream events.
-              outputChain = outputChain.then(() => onOutput(parsed));
+              forwardEvent(parsed);
             } catch (err) {
               logger.warn(
                 { group: group.name, error: err },
@@ -693,17 +716,14 @@ export async function runContainerAgent(
   const code = execResult.exitCode;
 
   if (timedOut) {
-    if (onOutput) {
-      outputChain = outputChain.then(() =>
-        onOutput({
-          type: 'state',
-          state: 'stopped',
-          newSessionId,
-          reason: lastLifecycleState === 'idle' ? 'idle_timeout' : 'timeout',
-          exitCode: code,
-        }),
-      );
-    }
+    const timedOutFromIdle = lastLifecycleState === 'idle';
+    forwardEvent({
+      type: 'state',
+      state: 'stopped',
+      newSessionId,
+      reason: timedOutFromIdle ? 'idle_timeout' : 'timeout',
+      exitCode: code,
+    });
 
     const ts = new Date().toISOString().replace(/[:.]/g, '-');
     const timeoutLog = path.join(logsDir, `container-${ts}.log`);
@@ -721,7 +741,7 @@ export async function runContainerAgent(
     );
 
     // Timeout after an explicit idle signal = idle cleanup, not failure.
-    if (lastLifecycleState === 'idle') {
+    if (timedOutFromIdle) {
       logger.info(
         { group: group.name, containerName, duration, code },
         'Box timed out after idle (idle cleanup)',
@@ -734,6 +754,15 @@ export async function runContainerAgent(
       { group: group.name, containerName, duration, code },
       'Box timed out before reaching idle',
     );
+    if (!hasStructuredError) {
+      forwardEvent({
+        type: 'error',
+        error: `Box timed out after ${configTimeout}ms`,
+        newSessionId,
+        kind: 'runtime',
+        retryable: false,
+      });
+    }
     await outputChain;
     return {
       status: 'error',
@@ -810,19 +839,25 @@ export async function runContainerAgent(
   fs.writeFileSync(logFile, logLines.join('\n'));
   logger.debug({ logFile, verbose: isVerbose }, 'Box log written');
 
-  if (onOutput) {
-    outputChain = outputChain.then(() =>
-      onOutput({
-        type: 'state',
-        state: 'stopped',
-        newSessionId,
-        reason: code === 0 ? 'exit' : 'error_exit',
-        exitCode: code,
-      }),
-    );
-  }
+  forwardEvent({
+    type: 'state',
+    state: 'stopped',
+    newSessionId,
+    reason: code === 0 ? 'exit' : 'error_exit',
+    exitCode: code,
+  });
 
   if (code !== 0) {
+    const errorMessage = `Box exited with code ${code}: ${stderr.slice(-200)}`;
+    if (!hasStructuredError) {
+      forwardEvent({
+        type: 'error',
+        error: errorMessage,
+        newSessionId,
+        kind: 'runtime',
+        retryable: false,
+      });
+    }
     await outputChain;
     logger.error(
       {
@@ -839,7 +874,7 @@ export async function runContainerAgent(
     return {
       status: 'error',
       result: null,
-      error: `Box exited with code ${code}: ${stderr.slice(-200)}`,
+      error: errorMessage,
     };
   }
 
@@ -871,12 +906,7 @@ export async function runContainerAgent(
 
       const event = JSON.parse(jsonLine) as ContainerEvent;
       events.push(event);
-      if (
-        (event.type === 'state' ||
-          event.type === 'result' ||
-          event.type === 'error') &&
-        event.newSessionId
-      ) {
+      if ('newSessionId' in event && event.newSessionId) {
         newSessionId = event.newSessionId;
       }
     }

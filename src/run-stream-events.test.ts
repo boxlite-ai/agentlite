@@ -28,11 +28,13 @@ import { _initTestDatabase, AgentDb } from './db.js';
 import { buildRuntimeConfig } from './runtime-config.js';
 import { runContainerAgent } from './container-runner.js';
 import type {
+  RunErrorEvent,
+  RunRateLimitedEvent,
   RunSdkMessageEvent,
+  RunStatusEvent,
+  RunSubagentEvent,
   RunToolEvent,
   RunToolProgressEvent,
-  RunSubagentEvent,
-  RunStatusEvent,
 } from './api/events.js';
 import type { Channel, RegisteredGroup } from './types.js';
 
@@ -599,6 +601,116 @@ describe('run.status (derived from sdk_message)', () => {
       agentId: agent.id,
       jid: 'mock:stream',
       status: 'compacting',
+    });
+  });
+});
+
+describe('run.rate_limited (derived from rate_limit_retry sdk_message)', () => {
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentlite-stream-'));
+    db = _initTestDatabase();
+    vi.mocked(runContainerAgent).mockReset();
+  });
+
+  afterEach(() => {
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+  });
+
+  it('emits retry details for backoff UI state', async () => {
+    const agent = setupAgent();
+
+    vi.mocked(runContainerAgent).mockImplementation(
+      async (_group, _input, _rc, _onProcess, onOutput) => {
+        await onOutput?.(
+          sdkMsg('rate_limit_retry', {
+            attempt: 2,
+            maxRetries: 5,
+            retryAfterMs: 2_500,
+            statusCode: 429,
+          }),
+        );
+        await onOutput?.({
+          type: 'state',
+          state: 'stopped',
+          reason: 'exit',
+          exitCode: 0,
+        });
+        return { status: 'success', result: null };
+      },
+    );
+
+    const events: RunRateLimitedEvent[] = [];
+    agent.on('run.rate_limited', (evt) => events.push(evt));
+
+    await agent.processGroupMessages('mock:stream');
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      agentId: agent.id,
+      jid: 'mock:stream',
+      attempt: 2,
+      maxRetries: 5,
+      retryAfterMs: 2_500,
+      statusCode: 429,
+    });
+  });
+});
+
+describe('run.error (derived from container error events)', () => {
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentlite-stream-'));
+    db = _initTestDatabase();
+    vi.mocked(runContainerAgent).mockReset();
+  });
+
+  afterEach(() => {
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+  });
+
+  it('emits exhausted retry details when the runtime gives up', async () => {
+    const agent = setupAgent();
+
+    vi.mocked(runContainerAgent).mockImplementation(
+      async (_group, _input, _rc, _onProcess, onOutput) => {
+        await onOutput?.({
+          type: 'error',
+          error: '429 rate limit',
+          kind: 'rate_limit',
+          statusCode: 429,
+          retryable: true,
+          exhaustedRetries: true,
+          retriesAttempted: 5,
+          maxRetries: 5,
+        });
+        return { status: 'error', result: null, error: '429 rate limit' };
+      },
+    );
+
+    const events: RunErrorEvent[] = [];
+    agent.on('run.error', (evt) => events.push(evt));
+
+    const processed = await agent.processGroupMessages('mock:stream');
+
+    expect(processed).toBe(false);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      agentId: agent.id,
+      jid: 'mock:stream',
+      kind: 'rate_limit',
+      error: '429 rate limit',
+      retryable: true,
+      exhaustedRetries: true,
+      retriesAttempted: 5,
+      maxRetries: 5,
+      statusCode: 429,
     });
   });
 });

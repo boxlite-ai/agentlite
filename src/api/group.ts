@@ -18,6 +18,8 @@ export interface ContainerConfig {
   additionalMounts?: AdditionalMount[];
   /** Container timeout in milliseconds. Default: 300000 (5 minutes). */
   timeout?: number;
+  /** Claude API retry count after the initial attempt. Default: 5. */
+  maxRetries?: number;
 }
 
 /** A registered group returned by the Agent API. */

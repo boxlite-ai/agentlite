@@ -204,6 +204,18 @@ export class MessageProcessor {
 
         if (event.type === 'error') {
           hadError = true;
+          this.ctx.emit('run.error', {
+            agentId: this.ctx.id,
+            jid: chatJid,
+            kind: event.kind ?? 'runtime',
+            error: event.error,
+            retryable: event.retryable,
+            exhaustedRetries: event.exhaustedRetries,
+            retriesAttempted: event.retriesAttempted,
+            maxRetries: event.maxRetries,
+            statusCode: event.statusCode,
+            timestamp: new Date().toISOString(),
+          });
           return;
         }
 
@@ -223,6 +235,18 @@ export class MessageProcessor {
           });
 
           // Derive curated convenience events from SDK messages
+          if (event.sdkType === 'rate_limit_retry') {
+            this.ctx.emit('run.rate_limited', {
+              agentId: this.ctx.id,
+              jid: chatJid,
+              attempt: msg.attempt,
+              maxRetries: msg.maxRetries,
+              retryAfterMs: msg.retryAfterMs,
+              statusCode: msg.statusCode,
+              timestamp: now,
+            });
+          }
+
           if (event.sdkType === 'assistant' && msg?.message?.content) {
             for (const block of msg.message.content) {
               if (block.type === 'tool_use' && block.name && block.id) {
@@ -378,6 +402,7 @@ export class MessageProcessor {
           chatJid,
           isMain,
           assistantName: this.ctx.config.assistantName,
+          maxRetries: group.containerConfig?.maxRetries,
           agentId: this.ctx.id,
           groupsDir: this.ctx.config.groupsDir,
           dataDir: this.ctx.config.dataDir,
@@ -408,6 +433,13 @@ export class MessageProcessor {
       }
       return 'success';
     } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      await wrappedOnOutput?.({
+        type: 'error',
+        error: errorMessage,
+        kind: 'runtime',
+        retryable: false,
+      });
       logger.error({ group: group.name, err }, 'Agent error');
       return 'error';
     }
