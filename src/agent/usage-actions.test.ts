@@ -2,7 +2,21 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
+
+vi.mock('../box-runtime.js', () => ({
+  setBoxliteHome: vi.fn(),
+  ensureRuntimeReady: vi.fn(),
+  cleanupOrphans: vi.fn().mockResolvedValue(undefined),
+  spawnBox: vi.fn(),
+}));
 
 import { createAgentLite } from '../api/sdk.js';
 import type { Agent } from '../api/agent.js';
