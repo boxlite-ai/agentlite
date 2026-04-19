@@ -577,9 +577,7 @@ export class AgentDb {
 
   memoryGet(groupJid: string, key: string): string | null {
     const row = this.db
-      .prepare(
-        'SELECT value FROM agent_memory WHERE group_jid = ? AND key = ?',
-      )
+      .prepare('SELECT value FROM agent_memory WHERE group_jid = ? AND key = ?')
       .get(groupJid, key) as { value: string | null } | undefined;
     return row?.value ?? null;
   }
