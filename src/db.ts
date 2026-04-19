@@ -67,7 +67,9 @@ export function createSchema(
 
     CREATE TABLE IF NOT EXISTS router_state (
       key TEXT PRIMARY KEY,
-      value TEXT NOT NULL
+      value TEXT NOT NULL,
+      context_utilization REAL,
+      context_utilization_at INTEGER
     );
     CREATE TABLE IF NOT EXISTS sessions (
       group_folder TEXT PRIMARY KEY,
@@ -142,6 +144,20 @@ export function createSchema(
   } catch {
     /* columns already exist */
   }
+
+  // Add context utilization columns if they don't exist (migration for existing DBs)
+  try {
+    database.exec(`ALTER TABLE router_state ADD COLUMN context_utilization REAL`);
+  } catch {
+    /* column already exists */
+  }
+  try {
+    database.exec(
+      `ALTER TABLE router_state ADD COLUMN context_utilization_at INTEGER`,
+    );
+  } catch {
+    /* column already exists */
+  }
 }
 
 export function initDatabase(opts: {
@@ -182,6 +198,10 @@ export class AgentDb {
     private assistantName: string,
     private dataDir: string,
   ) {}
+
+  private contextUtilizationKey(groupJid: string): string {
+    return `context_utilization:${groupJid}`;
+  }
 
   close(): void {
     this.db.close();
@@ -538,13 +558,43 @@ export class AgentDb {
       .run(key, value);
   }
 
+  setContextUtilization(groupJid: string, utilization: number | null): void {
+    this.db
+      .prepare(
+        `
+        INSERT INTO router_state (key, value, context_utilization, context_utilization_at)
+        VALUES (?, '', ?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+          value = excluded.value,
+          context_utilization = excluded.context_utilization,
+          context_utilization_at = excluded.context_utilization_at
+      `,
+      )
+      .run(
+        this.contextUtilizationKey(groupJid),
+        utilization,
+        utilization === null ? null : Date.now(),
+      );
+  }
+
+  getContextUtilization(groupJid: string): number | null {
+    const row = this.db
+      .prepare(
+        'SELECT context_utilization FROM router_state WHERE key = ?',
+      )
+      .get(this.contextUtilizationKey(groupJid)) as
+      | { context_utilization: number | null }
+      | undefined;
+    return row?.context_utilization ?? null;
+  }
+
   // --- Sessions ---
 
   getSession(groupFolder: string): string | undefined {
     const row = this.db
       .prepare('SELECT session_id FROM sessions WHERE group_folder = ?')
       .get(groupFolder) as { session_id: string } | undefined;
-    return row?.session_id;
+    return row?.session_id || undefined;
   }
 
   setSession(groupFolder: string, sessionId: string): void {
@@ -561,6 +611,7 @@ export class AgentDb {
       .all() as Array<{ group_folder: string; session_id: string }>;
     const result: Record<string, string> = {};
     for (const row of rows) {
+      if (!row.session_id) continue;
       result[row.group_folder] = row.session_id;
     }
     return result;

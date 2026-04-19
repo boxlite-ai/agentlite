@@ -14,6 +14,7 @@ export interface AgentEvents extends Record<string, any[]> {
   'run.tool_progress': [payload: RunToolProgressEvent];
   'run.subagent': [payload: RunSubagentEvent];
   'run.status': [payload: RunStatusEvent];
+  'context_compressed': [payload: ContextCompressedEvent];
   'chat.metadata': [payload: ChatMetadataEvent];
   'channel.connected': [payload: { key: string }];
   'channel.disconnected': [payload: { key: string }];
@@ -176,6 +177,22 @@ export interface RunStatusEvent {
   jid: string;
   /** Status string (e.g. 'compacting'). */
   status: string;
+  /** ISO timestamp. */
+  timestamp: string;
+}
+
+/** Conversation history was compacted into a fresh session. */
+export interface ContextCompressedEvent {
+  /** Stable agent identifier. */
+  agentId: string;
+  /** Group/chat identifier. */
+  jid: string;
+  /** Utilization value that triggered compression. */
+  utilization: number;
+  /** Number of older messages folded into the summary. */
+  messagesCompressed: number;
+  /** Number of recent messages kept verbatim. */
+  messagesKept: number;
   /** ISO timestamp. */
   timestamp: string;
 }

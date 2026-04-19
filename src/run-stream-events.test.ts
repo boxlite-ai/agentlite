@@ -9,6 +9,20 @@ import path from 'path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const contextCompressionMocks = vi.hoisted(() => ({
+  needsCompression: vi.fn((utilization: number | null) => utilization !== null && utilization >= 0.8),
+  compress: vi.fn(
+    async (messages: Array<{ sender: string; content: string }>) => {
+      const kept = Math.max(1, Math.floor(messages.length * 0.2));
+      return {
+        summary: 'condensed history',
+        messagesCompressed: messages.length - kept,
+        messagesKept: kept,
+      };
+    },
+  ),
+}));
+
 vi.mock('./container-runner.js', async () => {
   const actual = await vi.importActual<typeof import('./container-runner.js')>(
     './container-runner.js',
@@ -19,6 +33,18 @@ vi.mock('./container-runner.js', async () => {
   };
 });
 
+vi.mock('./agent/context-compressor.js', () => ({
+  ContextCompressor: class {
+    needsCompression(utilization: number | null) {
+      return contextCompressionMocks.needsCompression(utilization);
+    }
+
+    compress(messages: Array<{ sender: string; content: string }>) {
+      return contextCompressionMocks.compress(messages);
+    }
+  },
+}));
+
 import { AgentImpl } from './agent/agent-impl.js';
 import {
   buildAgentConfig,
@@ -28,6 +54,7 @@ import { _initTestDatabase, AgentDb } from './db.js';
 import { buildRuntimeConfig } from './runtime-config.js';
 import { runContainerAgent } from './container-runner.js';
 import type {
+  ContextCompressedEvent,
   RunSdkMessageEvent,
   RunToolEvent,
   RunToolProgressEvent,
@@ -108,6 +135,24 @@ function setupAgent(): AgentImpl {
 
   return agent;
 }
+
+beforeEach(() => {
+  contextCompressionMocks.needsCompression.mockReset();
+  contextCompressionMocks.needsCompression.mockImplementation(
+    (utilization: number | null) => utilization !== null && utilization >= 0.8,
+  );
+  contextCompressionMocks.compress.mockReset();
+  contextCompressionMocks.compress.mockImplementation(
+    async (messages: Array<{ sender: string; content: string }>) => {
+      const kept = Math.max(1, Math.floor(messages.length * 0.2));
+      return {
+        summary: 'condensed history',
+        messagesCompressed: messages.length - kept,
+        messagesKept: kept,
+      };
+    },
+  );
+});
 
 // ── Helpers to build sdk_message ContainerEvents ────────────────
 
@@ -256,6 +301,31 @@ describe('run.sdk_message (raw passthrough)', () => {
     await agent.processGroupMessages('mock:stream');
 
     expect(events[0].message).toEqual(rawMsg);
+  });
+
+  it('stores context utilization from rate_limit_event', async () => {
+    const agent = setupAgent();
+
+    vi.mocked(runContainerAgent).mockImplementation(
+      async (_group, _input, _rc, _onProcess, onOutput) => {
+        await onOutput?.(
+          sdkMsg('rate_limit_event', {
+            utilization: 0.5,
+          }),
+        );
+        await onOutput?.({
+          type: 'state',
+          state: 'stopped',
+          reason: 'exit',
+          exitCode: 0,
+        });
+        return { status: 'success', result: null };
+      },
+    );
+
+    await agent.processGroupMessages('mock:stream');
+
+    expect(db.getContextUtilization('mock:stream')).toBe(0.5);
   });
 });
 
@@ -600,6 +670,130 @@ describe('run.status (derived from sdk_message)', () => {
       jid: 'mock:stream',
       status: 'compacting',
     });
+  });
+});
+
+describe('context compression', () => {
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentlite-stream-'));
+    db = _initTestDatabase();
+    vi.mocked(runContainerAgent).mockReset();
+  });
+
+  afterEach(() => {
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+  });
+
+  it('prepends a summary block, clears the session, and emits context_compressed when utilization is high', async () => {
+    const agent = setupAgent();
+    db.setSession('main', 'existing-session');
+    (agent as unknown as { sessions: Record<string, string> }).sessions.main =
+      'existing-session';
+    db.setContextUtilization('mock:stream', 0.85);
+
+    for (let i = 2; i <= 10; i++) {
+      db.storeMessage({
+        id: `msg-${i}`,
+        chat_jid: 'mock:stream',
+        sender: `user${i}`,
+        sender_name: `User ${i}`,
+        content: `message ${i}`,
+        timestamp: `2026-04-13T00:00:${String(i).padStart(2, '0')}.000Z`,
+        is_from_me: false,
+      });
+    }
+
+    contextCompressionMocks.compress.mockResolvedValue({
+      summary: 'compressed context',
+      messagesCompressed: 8,
+      messagesKept: 2,
+    });
+
+    let capturedInput:
+      | {
+          prompt: string;
+          sessionId?: string;
+        }
+      | undefined;
+    const events: ContextCompressedEvent[] = [];
+    agent.on('context_compressed', (evt) => events.push(evt));
+
+    vi.mocked(runContainerAgent).mockImplementation(
+      async (_group, input, _rc, _onProcess, onOutput) => {
+        capturedInput = input;
+        await onOutput?.({
+          type: 'state',
+          state: 'stopped',
+          reason: 'exit',
+          exitCode: 0,
+        });
+        return { status: 'success', result: null };
+      },
+    );
+
+    await agent.processGroupMessages('mock:stream');
+
+    expect(capturedInput).toBeDefined();
+    expect(capturedInput!.sessionId).toBeUndefined();
+    expect(capturedInput!.prompt.startsWith('<context_summary')).toBe(true);
+    expect(capturedInput!.prompt).toContain('compressed context');
+    expect(capturedInput!.prompt).toContain('message 9');
+    expect(capturedInput!.prompt).toContain('message 10');
+    expect(capturedInput!.prompt).not.toContain('message 2');
+    expect(db.getContextUtilization('mock:stream')).toBeNull();
+    expect(db.getSession('main')).toBeUndefined();
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      agentId: agent.id,
+      jid: 'mock:stream',
+      utilization: 0.85,
+      messagesCompressed: 8,
+      messagesKept: 2,
+    });
+  });
+
+  it('leaves the prompt and session unchanged when utilization is below the threshold', async () => {
+    const agent = setupAgent();
+    db.setSession('main', 'existing-session');
+    (agent as unknown as { sessions: Record<string, string> }).sessions.main =
+      'existing-session';
+    db.setContextUtilization('mock:stream', 0.79);
+
+    let capturedInput:
+      | {
+          prompt: string;
+          sessionId?: string;
+        }
+      | undefined;
+    const events: ContextCompressedEvent[] = [];
+    agent.on('context_compressed', (evt) => events.push(evt));
+
+    vi.mocked(runContainerAgent).mockImplementation(
+      async (_group, input, _rc, _onProcess, onOutput) => {
+        capturedInput = input;
+        await onOutput?.({
+          type: 'state',
+          state: 'stopped',
+          reason: 'exit',
+          exitCode: 0,
+        });
+        return { status: 'success', result: null };
+      },
+    );
+
+    await agent.processGroupMessages('mock:stream');
+
+    expect(contextCompressionMocks.compress).not.toHaveBeenCalled();
+    expect(capturedInput).toBeDefined();
+    expect(capturedInput!.sessionId).toBe('existing-session');
+    expect(capturedInput!.prompt.startsWith('<context_summary')).toBe(false);
+    expect(capturedInput!.prompt).toContain('do something');
+    expect(db.getSession('main')).toBe('existing-session');
+    expect(events).toHaveLength(0);
   });
 });
 

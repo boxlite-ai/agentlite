@@ -527,3 +527,24 @@ describe('registered group isMain', () => {
     expect(group.isMain).toBeUndefined();
   });
 });
+
+describe('context utilization', () => {
+  it('returns null when utilization has not been stored', () => {
+    expect(db.getContextUtilization('group@g.us')).toBeNull();
+  });
+
+  it('stores and retrieves utilization per group', () => {
+    db.setContextUtilization('group@g.us', 0.5);
+    db.setContextUtilization('other@g.us', 0.85);
+
+    expect(db.getContextUtilization('group@g.us')).toBe(0.5);
+    expect(db.getContextUtilization('other@g.us')).toBe(0.85);
+  });
+
+  it('clears stored utilization when reset to null', () => {
+    db.setContextUtilization('group@g.us', 0.5);
+    db.setContextUtilization('group@g.us', null);
+
+    expect(db.getContextUtilization('group@g.us')).toBeNull();
+  });
+});

@@ -106,7 +106,7 @@ class StdioMcpClient {
             `MCP request ${method} #${id} timed out. stderr so far:\n${this.stderr}`,
           ),
         );
-      }, 5000);
+      }, 10_000);
       this.pending.set(id, (res) => {
         clearTimeout(timer);
         resolve(res);

@@ -9,7 +9,7 @@ import {
   runContainerAgent,
   writeGroupsSnapshot,
 } from '../container-runner.js';
-import { findChannel, formatMessages } from '../router.js';
+import { escapeXml, findChannel, formatMessages } from '../router.js';
 import {
   isSenderAllowed,
   isTriggerAllowed,
@@ -19,6 +19,7 @@ import {
 import { isAcpNoticeMessage } from '../acp/notice.js';
 import type { AgentContext } from './agent-context.js';
 import type { ChannelManager } from './channel-manager.js';
+import { ContextCompressor } from './context-compressor.js';
 import type { GroupManager } from './group-manager.js';
 import type { TaskManager } from './task-manager.js';
 import { buildMcpRuntimeConfig } from './mcp-runtime.js';
@@ -43,6 +44,7 @@ export class MessageProcessor {
   private messageLoopRunning = false;
   private _messageLoopPromise: Promise<void> | null = null;
   private _wakeLoop: (() => void) | null = null;
+  private readonly contextCompressor = new ContextCompressor();
 
   constructor(
     private readonly ctx: AgentContext,
@@ -123,10 +125,11 @@ export class MessageProcessor {
       if (!hasTrigger) return true;
     }
 
-    const prompt = formatMessages(
+    let prompt = formatMessages(
       missedMessages,
       this.ctx.runtimeConfig.timezone,
     );
+    prompt = await this.maybeCompressPrompt(chatJid, group, prompt);
 
     const previousCursor = this.ctx.lastAgentTimestamp[chatJid] || '';
     this.ctx.lastAgentTimestamp[chatJid] =
@@ -211,6 +214,7 @@ export class MessageProcessor {
         if (event.type === 'sdk_message') {
           const now = new Date().toISOString();
           const msg = event.message;
+          const utilization = this.getRateLimitUtilization(msg);
 
           // Always emit raw event — consumers get all 21 SDK types
           this.ctx.emit('run.sdk_message', {
@@ -221,6 +225,10 @@ export class MessageProcessor {
             message: msg,
             timestamp: now,
           });
+
+          if (event.sdkType === 'rate_limit_event' && utilization !== null) {
+            this.ctx.db.setContextUtilization(chatJid, utilization);
+          }
 
           // Derive curated convenience events from SDK messages
           if (event.sdkType === 'assistant' && msg?.message?.content) {
@@ -509,5 +517,91 @@ export class MessageProcessor {
     }
 
     this.messageLoopRunning = false;
+  }
+
+  private async maybeCompressPrompt(
+    chatJid: string,
+    group: InternalRegisteredGroup,
+    prompt: string,
+  ): Promise<string> {
+    const utilization = this.ctx.db.getContextUtilization(chatJid);
+    if (!this.contextCompressor.needsCompression(utilization)) {
+      return prompt;
+    }
+
+    const recentMessages = this.ctx.db.getMessagesSince(
+      chatJid,
+      '',
+      this.ctx.config.assistantName,
+    );
+    if (recentMessages.length === 0) {
+      return prompt;
+    }
+
+    try {
+      const result = await this.contextCompressor.compress(
+        recentMessages.map((message) => ({
+          sender: message.sender_name || message.sender,
+          content: message.content,
+        })),
+      );
+      if (result.messagesCompressed === 0) {
+        return prompt;
+      }
+      const keptMessages =
+        result.messagesKept > 0
+          ? recentMessages.slice(-result.messagesKept)
+          : recentMessages;
+      const compressedAt = new Date().toISOString();
+
+      delete this.ctx.sessions[group.folder];
+      this.ctx.db.setSession(group.folder, '');
+      this.ctx.db.setContextUtilization(chatJid, null);
+      this.ctx.emit('context_compressed', {
+        agentId: this.ctx.id,
+        jid: chatJid,
+        utilization,
+        messagesCompressed: result.messagesCompressed,
+        messagesKept: result.messagesKept,
+        timestamp: compressedAt,
+      });
+
+      return `${this.buildContextSummaryBlock(result.summary, compressedAt)}\n${formatMessages(
+        keptMessages,
+        this.ctx.runtimeConfig.timezone,
+      )}`;
+    } catch (err) {
+      logger.warn(
+        { chatJid, group: group.name, err },
+        'Context compression skipped',
+      );
+      return prompt;
+    }
+  }
+
+  private buildContextSummaryBlock(
+    summary: string,
+    compressedAt: string,
+  ): string {
+    return `<context_summary type="compressed" compressed_at="${escapeXml(compressedAt)}">\nEarlier conversation summary (auto-generated):\n${escapeXml(summary)}\n</context_summary>`;
+  }
+
+  private getRateLimitUtilization(message: unknown): number | null {
+    if (!message || typeof message !== 'object') {
+      return null;
+    }
+
+    const record = message as Record<string, unknown>;
+    if (typeof record.utilization === 'number') {
+      return record.utilization;
+    }
+
+    const rateLimitInfo = record.rate_limit_info;
+    if (!rateLimitInfo || typeof rateLimitInfo !== 'object') {
+      return null;
+    }
+
+    const utilization = (rateLimitInfo as Record<string, unknown>).utilization;
+    return typeof utilization === 'number' ? utilization : null;
   }
 }
