@@ -371,7 +371,10 @@ export class MessageProcessor {
 
   private checkToolErrorRateAlert(chatJid: string, toolName: string): void {
     const sinceHour = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-    const rows = this.ctx.db.getToolUsageSummary({ since: sinceHour, toolName });
+    const rows = this.ctx.db.getToolUsageSummary({
+      since: sinceHour,
+      toolName,
+    });
     const row = rows[0];
     if (row && row.call_count >= 5 && row.success_rate < 0.8) {
       logger.warn(

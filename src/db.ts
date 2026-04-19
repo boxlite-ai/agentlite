@@ -563,10 +563,7 @@ export class AgentDb {
       );
   }
 
-  getToolUsageSummary(opts?: {
-    since?: string;
-    toolName?: string;
-  }): Array<{
+  getToolUsageSummary(opts?: { since?: string; toolName?: string }): Array<{
     tool_name: string;
     call_count: number;
     success_count: number;
