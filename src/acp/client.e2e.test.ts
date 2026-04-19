@@ -197,4 +197,43 @@ describe('ACP background prompt e2e', () => {
       }),
     ]);
   });
+
+  it('returns the real peer response synchronously via agent_delegate', async () => {
+    const response = await callAction(
+      agent,
+      'team',
+      'agent_delegate',
+      {
+        target_group_jid: 'test-peer',
+        prompt: 'delegate this prompt',
+      },
+      'team@g.us',
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.json.result).toMatchObject({
+      status: 'completed',
+      text: expect.stringContaining('real peer says hello'),
+    });
+  });
+
+  it('returns a failed result when agent_delegate times out', async () => {
+    const response = await callAction(
+      agent,
+      'team',
+      'agent_delegate',
+      {
+        target_group_jid: 'test-peer',
+        prompt: 'delegate this prompt',
+        timeout_ms: 1,
+      },
+      'team@g.us',
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.json.result).toMatchObject({
+      status: 'failed',
+      error: expect.stringContaining('timed out'),
+    });
+  });
 });

@@ -6,11 +6,12 @@
 // `search_actions({query: "acp"})` to discover, then `call_action(...)` to
 // invoke, using the existing PR #44 http-actions infrastructure.
 //
-// Five actions get registered per agent (when options.acp.peers is set):
+// Six actions get registered per agent (when options.acp.peers is set):
 //
 //   acp_list_remote_agents — directory snapshot
 //   acp_new_session        — create a session on a peer
 //   acp_prompt             — send PromptRequest in the background
+//   agent_delegate         — send a synchronous prompt in an isolated session
 //   acp_cancel             — session/cancel notification
 //   acp_close_session      — drop local session tracking
 //
@@ -180,7 +181,7 @@ export class AcpOutboundClient {
   }
 
   /**
-   * Register the five core ACP conversation primitives as HTTP actions on
+   * Register the core ACP conversation primitives as HTTP actions on
    * the given agent. Called during `AgentImpl.startSubsystems()` after the
    * existing `actionsHttp` is wired up.
    */
@@ -220,6 +221,28 @@ export class AcpOutboundClient {
           .describe('ACP PromptRequest.prompt — array of ContentBlocks'),
       },
       async (args, ctx) => this.handlePrompt(args, ctx),
+    );
+
+    agent.action(
+      'agent_delegate',
+      'Delegate a prompt to another agent synchronously via ACP. Opens an isolated session to the target peer, sends the prompt, waits for the full response, and returns the result directly. Sub-agent sessions are isolated — no caller context is shared. The action blocks until the sub-agent finishes or the timeout expires.',
+      {
+        target_group_jid: z
+          .string()
+          .describe(
+            'Peer name from acp_list_remote_agents — the target agent to delegate to',
+          ),
+        prompt: z.string().describe('The prompt text to send to the sub-agent'),
+        timeout_ms: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe(
+            'Response timeout in milliseconds. Default: 300000 (5 minutes)',
+          ),
+      },
+      async (args, ctx) => this.handleDelegate(args, ctx),
     );
 
     agent.action(
@@ -312,6 +335,91 @@ export class AcpOutboundClient {
     session.activeRunId = run.id;
     void this.runPromptInBackground(run, peer, args.prompt, acc);
     return { ok: true };
+  }
+
+  private async handleDelegate(
+    args: { target_group_jid: string; prompt: string; timeout_ms?: number },
+    ctx: ActionContext,
+  ): Promise<{
+    text: string;
+    status: 'completed' | 'failed' | 'cancelled';
+    stop_reason?: string;
+    error?: string;
+  }> {
+    const peer = this.requirePeer(args.target_group_jid);
+    await this.ensurePeerReady(peer);
+
+    const callerChatJid = this.deps.resolveCallerChatJid(ctx);
+    const cwd = resolveGroupFolderPath(ctx.sourceGroup, this.deps.groupsDir);
+    fs.mkdirSync(cwd, { recursive: true });
+
+    const { sessionId } = await peer.connection!.newSession({
+      cwd,
+      mcpServers: [],
+    });
+
+    const timeoutMs = args.timeout_ms ?? 5 * 60 * 1000;
+    const acc: SessionAccumulator = { text: [], toolCalls: [] };
+    this.sessions.set(sessionId, {
+      peer: peer.config.name,
+      callerGroupFolder: ctx.sourceGroup,
+      callerChatJid,
+      createdAt: Date.now(),
+      accumulator: acc,
+      activeRunId: null,
+    });
+
+    let status: 'completed' | 'failed' | 'cancelled' = 'failed';
+    let stopReason: string | undefined;
+    let error: string | undefined;
+
+    try {
+      let timeoutHandle: NodeJS.Timeout | undefined;
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeoutHandle = setTimeout(
+          () =>
+            reject(new Error(`agent_delegate timed out after ${timeoutMs}ms`)),
+          timeoutMs,
+        );
+      });
+
+      try {
+        const response = await Promise.race([
+          peer.connection!.prompt({
+            sessionId,
+            prompt: [{ type: 'text', text: args.prompt }],
+          }),
+          timeoutPromise,
+        ]);
+        stopReason = response.stopReason;
+        status =
+          response.stopReason === 'cancelled' ? 'cancelled' : 'completed';
+      } finally {
+        clearTimeout(timeoutHandle);
+      }
+    } catch (err) {
+      error = errMsg(err);
+      if (peer.connection) {
+        try {
+          await peer.connection.cancel({ sessionId });
+        } catch {
+          // best-effort
+        }
+      }
+      logger.warn(
+        { session_id: sessionId, peer: peer.config.name, err: error },
+        'acp: agent_delegate failed',
+      );
+    } finally {
+      this.sessions.delete(sessionId);
+    }
+
+    return {
+      text: acc.text.join(''),
+      status,
+      ...(stopReason !== undefined ? { stop_reason: stopReason } : {}),
+      ...(error !== undefined ? { error } : {}),
+    };
   }
 
   private async handleCancel(
