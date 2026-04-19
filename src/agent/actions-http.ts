@@ -28,7 +28,12 @@ import type {
   ActionLog,
   RegisteredAction,
 } from '../api/action.js';
+import type { Agent } from '../api/agent.js';
 import { logger } from '../logger.js';
+import {
+  registerMemoryActions,
+  type MemoryActionDeps,
+} from './memory-actions.js';
 
 interface TokenBinding {
   groupFolder: string;
@@ -39,6 +44,13 @@ export interface ActionsHttpInfo {
   url: string;
   host: string;
   port: number;
+}
+
+export function registerBuiltinActions(
+  agent: Agent,
+  deps: MemoryActionDeps,
+): void {
+  registerMemoryActions(agent, deps);
 }
 
 export class ActionsHttp {
