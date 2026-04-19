@@ -15,9 +15,11 @@ import {
 import { buildRuntimeConfig } from './runtime-config.js';
 import { _initTestDatabase, AgentDb } from './db.js';
 import type { Channel } from './types.js';
+import type { ChannelDriverConfig } from './api/channel-driver.js';
 
 let tmpDir: string;
 const rtConfig = buildRuntimeConfig({}, '/tmp/agentlite-test-pkg');
+type OnMessageHandler = ChannelDriverConfig['onMessage'];
 
 function createAgent(name: string): AgentImpl {
   const config = buildAgentConfig({
@@ -83,7 +85,7 @@ describe('message.in event', () => {
     // Access the internal handler directly
     const handler = (
       agent as unknown as {
-        buildDefaultChannelHandler: () => { onMessage: Function };
+        buildDefaultChannelHandler: () => { onMessage: OnMessageHandler };
       }
     ).buildDefaultChannelHandler();
 
@@ -113,7 +115,7 @@ describe('message.in event', () => {
 
     const handler = (
       agent as unknown as {
-        buildDefaultChannelHandler: () => { onMessage: Function };
+        buildDefaultChannelHandler: () => { onMessage: OnMessageHandler };
       }
     ).buildDefaultChannelHandler();
 
@@ -137,7 +139,7 @@ describe('message.in event', () => {
 
     const handler = (
       agent as unknown as {
-        buildDefaultChannelHandler: () => { onMessage: Function };
+        buildDefaultChannelHandler: () => { onMessage: OnMessageHandler };
       }
     ).buildDefaultChannelHandler();
 
@@ -166,7 +168,7 @@ describe('message.in event', () => {
 
     const handler = (
       agent as unknown as {
-        buildDefaultChannelHandler: () => { onMessage: Function };
+        buildDefaultChannelHandler: () => { onMessage: OnMessageHandler };
       }
     ).buildDefaultChannelHandler();
 
@@ -203,7 +205,9 @@ describe('message.in event', () => {
     // Simulate what happens inside addChannel → factory(config)
     // The factory receives config.onMessage — calling it should trigger message.in
     const config = (
-      agent as unknown as { _buildDriverConfig: () => { onMessage: Function } }
+      agent as unknown as {
+        _buildDriverConfig: () => { onMessage: OnMessageHandler };
+      }
     )._buildDriverConfig();
 
     // This is what a real ChannelDriver would call when it receives a message

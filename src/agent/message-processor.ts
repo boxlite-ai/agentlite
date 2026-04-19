@@ -11,10 +11,8 @@ import {
 } from '../container-runner.js';
 import { findChannel, formatMessages } from '../router.js';
 import {
-  isSenderAllowed,
   isTriggerAllowed,
   loadSenderAllowlist,
-  shouldDropMessage,
 } from '../sender-allowlist.js';
 import { isAcpNoticeMessage } from '../acp/notice.js';
 import type { AgentContext } from './agent-context.js';

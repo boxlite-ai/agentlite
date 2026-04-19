@@ -147,7 +147,6 @@ vi.mock('./box-runtime.js', () => ({
 import {
   runContainerAgent,
   type ContainerEvent,
-  type ContainerOutput,
 } from './container-runner.js';
 import type { RuntimeConfig } from './runtime-config.js';
 import type { RegisteredGroup } from './types.js';

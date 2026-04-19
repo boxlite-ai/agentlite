@@ -14,7 +14,7 @@
  *   D — healthy path: LAN IP → shim reaches host handler over HTTP
  *   E — negative: bogus token is rejected and bubbles back through stdio
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import os from 'os';
 import path from 'path';
 import url from 'url';
