@@ -593,9 +593,9 @@ export class AgentDb {
     this.db
       .prepare(
         `INSERT OR REPLACE INTO agent_memory (group_jid, key, value, updated_at)
-         VALUES (?, ?, ?, ?)`,
+         VALUES (?, ?, ?, unixepoch())`,
       )
-      .run(groupJid, key, value, Date.now());
+      .run(groupJid, key, value);
   }
 
   memoryList(groupJid: string): Array<{ key: string; value: string | null }> {
