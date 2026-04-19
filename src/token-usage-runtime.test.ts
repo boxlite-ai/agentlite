@@ -130,7 +130,11 @@ describe('token usage runtime persistence', () => {
           result: 'done',
           newSessionId: 'session-runtime',
         });
-        return { status: 'success', result: 'done', newSessionId: 'session-runtime' };
+        return {
+          status: 'success',
+          result: 'done',
+          newSessionId: 'session-runtime',
+        };
       },
     );
 
