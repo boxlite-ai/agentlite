@@ -735,6 +735,10 @@ async function runQuery(
     {
       maxRetries: containerInput.maxRetries,
       onRetry: async (retry) => {
+        if (retry.kind !== 'rate_limit') {
+          return;
+        }
+
         writeOutput({
           type: 'sdk_message',
           sdkType: 'rate_limit_retry',

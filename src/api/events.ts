@@ -87,7 +87,7 @@ export interface RunStateEvent {
   exitCode?: number;
 }
 
-/** Claude API retry scheduled after a rate-limit or transient failure. */
+/** Claude API retry scheduled after an upstream rate limit. */
 export interface RunRateLimitedEvent {
   /** Stable agent identifier. */
   agentId: string;
@@ -99,8 +99,8 @@ export interface RunRateLimitedEvent {
   maxRetries: number;
   /** Backoff delay in milliseconds. */
   retryAfterMs: number;
-  /** Best-effort upstream status code, when available. */
-  statusCode?: number;
+  /** Upstream HTTP status code. */
+  statusCode: number;
   /** ISO timestamp. */
   timestamp: string;
 }
