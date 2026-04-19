@@ -40,11 +40,7 @@ function hasWakeTrigger(
 }
 
 function extractText(
-  content:
-    | string
-    | Array<{ text?: string | null } | null>
-    | null
-    | undefined,
+  content: string | Array<{ text?: string | null } | null> | null | undefined,
 ): string | undefined {
   if (typeof content === 'string') {
     const text = content.trim();
