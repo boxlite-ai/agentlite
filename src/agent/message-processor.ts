@@ -10,10 +10,7 @@ import {
   writeGroupsSnapshot,
 } from '../container-runner.js';
 import { findChannel, formatMessages } from '../router.js';
-import {
-  isTriggerAllowed,
-  loadSenderAllowlist,
-} from '../sender-allowlist.js';
+import { isTriggerAllowed, loadSenderAllowlist } from '../sender-allowlist.js';
 import { isAcpNoticeMessage } from '../acp/notice.js';
 import type { AgentContext } from './agent-context.js';
 import type { ChannelManager } from './channel-manager.js';
