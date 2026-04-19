@@ -39,6 +39,25 @@ function hasWakeTrigger(
   );
 }
 
+function extractText(
+  content:
+    | string
+    | Array<{ text?: string | null } | null>
+    | null
+    | undefined,
+): string | undefined {
+  if (typeof content === 'string') {
+    const text = content.trim();
+    return text || undefined;
+  }
+  if (!Array.isArray(content)) return undefined;
+  const text = content
+    .map((block) => block?.text ?? '')
+    .join('')
+    .trim();
+  return text || undefined;
+}
+
 export class MessageProcessor {
   private messageLoopRunning = false;
   private _messageLoopPromise: Promise<void> | null = null;
@@ -256,18 +275,11 @@ export class MessageProcessor {
                 if (pending) {
                   pendingToolCalls.delete(block.tool_use_id);
                   const durationMs = Date.now() - pending.startedAt;
+                  const ts = new Date().toISOString();
                   const isError = block.is_error === true;
-                  let errorMessage: string | undefined;
-                  if (isError && block.content) {
-                    if (typeof block.content === 'string') {
-                      errorMessage = block.content.slice(0, 500);
-                    } else if (Array.isArray(block.content)) {
-                      errorMessage = block.content
-                        .map((c: { text?: string }) => c.text ?? '')
-                        .join('')
-                        .slice(0, 500);
-                    }
-                  }
+                  const errorMessage = isError
+                    ? extractText(block.content)?.slice(0, 500)
+                    : undefined;
                   this.ctx.db.recordToolUsage({
                     groupJid: chatJid,
                     sessionId: undefined,
@@ -275,9 +287,9 @@ export class MessageProcessor {
                     success: !isError,
                     errorMessage,
                     durationMs,
-                    ts: now,
+                    ts,
                   });
-                  this.checkToolErrorRateAlert(chatJid, pending.toolName);
+                  this.checkToolErrorRateAlert(pending.toolName);
                 }
               }
             }
@@ -369,10 +381,10 @@ export class MessageProcessor {
     return true;
   }
 
-  private checkToolErrorRateAlert(chatJid: string, toolName: string): void {
-    const sinceHour = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  private checkToolErrorRateAlert(toolName: string): void {
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
     const rows = this.ctx.db.getToolUsageSummary({
-      since: sinceHour,
+      since: oneHourAgo,
       toolName,
     });
     const row = rows[0];
@@ -383,7 +395,6 @@ export class MessageProcessor {
       );
       this.ctx.emit('run.tool_alert', {
         agentId: this.ctx.id,
-        jid: chatJid,
         toolName,
         callCount: row.call_count,
         successRate: row.success_rate,

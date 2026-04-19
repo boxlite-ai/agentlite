@@ -529,27 +529,55 @@ describe('registered group isMain', () => {
 });
 
 describe('tool_usage', () => {
-  it('records usage and returns correct aggregates', () => {
+  it('recordToolUsage inserts rows', () => {
     db.recordToolUsage({
       groupJid: 'group@g.us',
       toolName: 'Bash',
       success: true,
+      errorMessage: undefined,
       durationMs: 120,
       ts: '2026-04-19T00:00:00.000Z',
     });
 
-    expect(db.getToolUsageSummary()).toEqual([
+    const rows = (
+      db as unknown as {
+        db: {
+          prepare: (sql: string) => {
+            all: () => Array<{
+              group_jid: string;
+              session_id: string | null;
+              tool_name: string;
+              success: number;
+              error_message: string | null;
+              duration_ms: number;
+              ts: string;
+            }>;
+          };
+        };
+      }
+    ).db
+      .prepare(
+        `
+        SELECT group_jid, session_id, tool_name, success, error_message, duration_ms, ts
+        FROM tool_usage
+      `,
+      )
+      .all();
+
+    expect(rows).toEqual([
       {
+        group_jid: 'group@g.us',
+        session_id: null,
         tool_name: 'Bash',
-        call_count: 1,
-        success_count: 1,
-        success_rate: 1,
-        avg_duration_ms: 120,
+        success: 1,
+        error_message: null,
+        duration_ms: 120,
+        ts: '2026-04-19T00:00:00.000Z',
       },
     ]);
   });
 
-  it('computes mixed success and failure rates correctly', () => {
+  it('getToolUsageSummary returns correct aggregates', () => {
     db.recordToolUsage({
       groupJid: 'group@g.us',
       toolName: 'Bash',

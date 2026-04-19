@@ -137,8 +137,6 @@ export interface RunToolEvent {
 export interface RunToolAlertEvent {
   /** Stable agent identifier. */
   agentId: string;
-  /** Group/chat identifier. */
-  jid: string;
   /** Tool name. */
   toolName: string;
   /** Number of calls in the alert window. */

@@ -228,4 +228,75 @@ describe('tool usage analytics', () => {
       }),
     ]);
   });
+
+  it('emits run.tool_alert when a tool falls below the hourly success threshold', async () => {
+    const agent = setupAgent();
+    const alerts: Array<Record<string, unknown>> = [];
+    agent.on('run.tool_alert', (evt) =>
+      alerts.push(evt as unknown as Record<string, unknown>),
+    );
+
+    vi.mocked(runContainerAgent).mockImplementation(
+      async (_group, _input, _rc, _onProcess, onOutput) => {
+        for (let i = 1; i <= 5; i += 1) {
+          await onOutput?.(
+            sdkMsg('assistant', {
+              uuid: `a-${i}`,
+              message: {
+                content: [
+                  {
+                    type: 'tool_use',
+                    name: 'Bash',
+                    id: `tool-${i}`,
+                    input: { command: `step-${i}` },
+                  },
+                ],
+              },
+            }),
+          );
+          await onOutput?.(
+            sdkMsg('user', {
+              uuid: `u-${i}`,
+              message: {
+                content: [
+                  {
+                    type: 'tool_result',
+                    tool_use_id: `tool-${i}`,
+                    is_error: i !== 5,
+                    content: i !== 5 ? `failure ${i}` : 'ok',
+                  },
+                ],
+              },
+            }),
+          );
+        }
+        await onOutput?.({
+          type: 'state',
+          state: 'stopped',
+          reason: 'exit',
+          exitCode: 0,
+        });
+        return { status: 'success', result: null };
+      },
+    );
+
+    await agent.processGroupMessages('mock:tool-usage');
+
+    expect(db.getToolUsageSummary()).toEqual([
+      expect.objectContaining({
+        tool_name: 'Bash',
+        call_count: 5,
+        success_count: 1,
+        success_rate: 0.2,
+      }),
+    ]);
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toMatchObject({
+      agentId: agent.id,
+      toolName: 'Bash',
+      callCount: 5,
+      successRate: 0.2,
+    });
+    expect(alerts[0]).not.toHaveProperty('jid');
+  });
 });

@@ -538,7 +538,7 @@ export class AgentDb {
 
   recordToolUsage(entry: {
     groupJid: string;
-    sessionId?: string;
+    sessionId: string | undefined;
     toolName: string;
     success: boolean;
     errorMessage?: string;
@@ -580,18 +580,16 @@ export class AgentDb {
       CAST(SUM(success) AS REAL) / COUNT(*)      AS success_rate,
       CAST(SUM(duration_ms) AS REAL) / COUNT(*)  AS avg_duration_ms
     FROM tool_usage
-    WHERE (? IS NULL OR ts >= ?)
-      AND (? IS NULL OR tool_name = ?)
+    WHERE (:since IS NULL OR ts >= :since)
+      AND (:toolName IS NULL OR tool_name = :toolName)
     GROUP BY tool_name
     ORDER BY call_count DESC
   `,
       )
-      .all(
-        opts?.since ?? null,
-        opts?.since ?? null,
-        opts?.toolName ?? null,
-        opts?.toolName ?? null,
-      ) as Array<{
+      .all({
+        since: opts?.since ?? null,
+        toolName: opts?.toolName ?? null,
+      }) as Array<{
       tool_name: string;
       call_count: number;
       success_count: number;
