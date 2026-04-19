@@ -202,8 +202,36 @@ export class MessageProcessor {
           return;
         }
 
+        if (event.type === 'retry') {
+          this.ctx.emit('run.retry', {
+            agentId: this.ctx.id,
+            jid: chatJid,
+            kind: event.kind,
+            attempt: event.attempt,
+            maxRetries: event.maxRetries,
+            delayMs: event.delayMs,
+            delaySeconds: Math.ceil(event.delayMs / 1000),
+            statusCode: event.statusCode,
+            error: event.error,
+            timestamp: new Date().toISOString(),
+          });
+          return;
+        }
+
         if (event.type === 'error') {
           hadError = true;
+          this.ctx.emit('run.error', {
+            agentId: this.ctx.id,
+            jid: chatJid,
+            kind: event.kind ?? 'runtime',
+            error: event.error,
+            retryable: event.retryable,
+            exhaustedRetries: event.exhaustedRetries,
+            retriesAttempted: event.retriesAttempted,
+            maxRetries: event.maxRetries,
+            statusCode: event.statusCode,
+            timestamp: new Date().toISOString(),
+          });
           return;
         }
 
@@ -378,6 +406,7 @@ export class MessageProcessor {
           chatJid,
           isMain,
           assistantName: this.ctx.config.assistantName,
+          maxRetries: group.containerConfig?.maxRetries,
           agentId: this.ctx.id,
           groupsDir: this.ctx.config.groupsDir,
           dataDir: this.ctx.config.dataDir,
@@ -408,6 +437,13 @@ export class MessageProcessor {
       }
       return 'success';
     } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      await wrappedOnOutput?.({
+        type: 'error',
+        error: errorMessage,
+        kind: 'runtime',
+        retryable: false,
+      });
       logger.error({ group: group.name, err }, 'Agent error');
       return 'error';
     }

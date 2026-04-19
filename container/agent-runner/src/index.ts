@@ -23,6 +23,12 @@ import {
 } from '@anthropic-ai/claude-agent-sdk';
 import { fileURLToPath } from 'url';
 
+import {
+  getRetryDescriptor,
+  normalizeMaxRetries,
+  withRetry,
+} from './retry.js';
+
 interface McpServerRuntimeConfig {
   command: string;
   args?: string[];
@@ -37,6 +43,7 @@ interface ContainerInput {
   isMain: boolean;
   isScheduledTask?: boolean;
   assistantName?: string;
+  maxRetries?: number;
   /** Custom MCP server runtime configs. Sources are at /workspace/agent/mcp/{name}/. */
   mcpServers?: Record<string, McpServerRuntimeConfig> | null;
   /** Host-side actions HTTP server coordinates for the built-in MCP shim. */
@@ -62,6 +69,23 @@ interface ContainerErrorOutput {
   type: 'error';
   error: string;
   newSessionId?: string;
+  kind?: 'rate_limit' | 'transient' | 'runtime';
+  statusCode?: number;
+  retryable?: boolean;
+  exhaustedRetries?: boolean;
+  retriesAttempted?: number;
+  maxRetries?: number;
+}
+
+interface ContainerRetryOutput {
+  type: 'retry';
+  kind: 'rate_limit' | 'transient';
+  error: string;
+  delayMs: number;
+  attempt: number;
+  maxRetries: number;
+  newSessionId?: string;
+  statusCode?: number;
 }
 
 // ── Raw SDK message passthrough ──────────────────────────────────
@@ -81,6 +105,7 @@ type ContainerOutput =
   | ContainerStateOutput
   | ContainerResultOutput
   | ContainerErrorOutput
+  | ContainerRetryOutput
   | ContainerSdkMessageOutput;
 
 interface SessionEntry {
@@ -140,6 +165,31 @@ class MessageStream {
       });
       this.waiting = null;
     }
+  }
+}
+
+class QueryAttemptError extends Error {
+  readonly newSessionId?: string;
+  readonly lastAssistantUuid?: string;
+  readonly closedDuringQuery: boolean;
+  readonly resultCount: number;
+
+  constructor(
+    message: string,
+    opts: {
+      cause: unknown;
+      newSessionId?: string;
+      lastAssistantUuid?: string;
+      closedDuringQuery: boolean;
+      resultCount: number;
+    },
+  ) {
+    super(message, { cause: opts.cause });
+    this.name = 'QueryAttemptError';
+    this.newSessionId = opts.newSessionId;
+    this.lastAssistantUuid = opts.lastAssistantUuid;
+    this.closedDuringQuery = opts.closedDuringQuery;
+    this.resultCount = opts.resultCount;
   }
 }
 
@@ -427,12 +477,12 @@ function waitForIpcMessage(): Promise<string | null> {
 }
 
 /**
- * Run a single query and stream results via writeOutput.
+ * Run a single query attempt and stream results via writeOutput.
  * Uses MessageStream (AsyncIterable) to keep isSingleUserTurn=false,
  * allowing agent teams subagents to run to completion.
  * Also pipes IPC messages into the stream during the query.
  */
-async function runQuery(
+async function runQueryAttempt(
   prompt: string,
   sessionId: string | undefined,
   mcpServerPath: string,
@@ -446,12 +496,6 @@ async function runQuery(
 }> {
   const stream = new MessageStream();
   stream.push(prompt);
-  writeOutput({
-    type: 'state',
-    state: 'active',
-    newSessionId: sessionId,
-    reason: 'query_started',
-  });
 
   // Poll IPC for follow-up messages and _close sentinel during the query
   let ipcPolling = true;
@@ -515,121 +559,135 @@ async function runQuery(
     log(`Additional directories: ${extraDirs.join(', ')}`);
   }
 
-  for await (const message of query({
-    prompt: stream,
-    options: {
-      includePartialMessages: true,
-      cwd: '/workspace/group',
-      additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
-      resume: sessionId,
-      resumeSessionAt: resumeAt,
-      systemPrompt: appendedSystemPrompt
-        ? {
-            type: 'preset' as const,
-            preset: 'claude_code' as const,
-            append: appendedSystemPrompt,
-          }
-        : undefined,
-      allowedTools: [
-        'Bash',
-        'Read',
-        'Write',
-        'Edit',
-        'Glob',
-        'Grep',
-        'WebSearch',
-        'WebFetch',
-        'Task',
-        'TaskOutput',
-        'TaskStop',
-        'TeamCreate',
-        'TeamDelete',
-        'SendMessage',
-        'TodoWrite',
-        'ToolSearch',
-        'Skill',
-        'NotebookEdit',
-        'mcp__agentlite__*',
-        // Allow tools from all custom MCP servers
-        ...Object.keys(containerInput.mcpServers ?? {}).map(
-          (name) => `mcp__${name}__*`,
-        ),
-      ],
-      env: sdkEnv,
-      permissionMode: 'bypassPermissions',
-      allowDangerouslySkipPermissions: true,
-      settingSources: ['project', 'user'],
-      mcpServers: {
-        agentlite: {
-          command: 'node',
-          args: [mcpServerPath],
-          env: {
-            AGENTLITE_CHAT_JID: containerInput.chatJid,
-            AGENTLITE_GROUP_FOLDER: containerInput.groupFolder,
-            AGENTLITE_IS_MAIN: containerInput.isMain ? '1' : '0',
-            ...(containerInput.actionsAuth
-              ? {
-                  AGENTLITE_ACTIONS_URL: containerInput.actionsAuth.url,
-                  AGENTLITE_ACTIONS_TOKEN: containerInput.actionsAuth.token,
-                }
-              : {}),
-          },
-        },
-        ...Object.fromEntries(
-          Object.entries(containerInput.mcpServers ?? {}).map(
-            ([name, cfg]) => [name, cfg],
+  try {
+    for await (const message of query({
+      prompt: stream,
+      options: {
+        includePartialMessages: true,
+        cwd: '/workspace/group',
+        additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
+        resume: sessionId,
+        resumeSessionAt: resumeAt,
+        systemPrompt: appendedSystemPrompt
+          ? {
+              type: 'preset' as const,
+              preset: 'claude_code' as const,
+              append: appendedSystemPrompt,
+            }
+          : undefined,
+        allowedTools: [
+          'Bash',
+          'Read',
+          'Write',
+          'Edit',
+          'Glob',
+          'Grep',
+          'WebSearch',
+          'WebFetch',
+          'Task',
+          'TaskOutput',
+          'TaskStop',
+          'TeamCreate',
+          'TeamDelete',
+          'SendMessage',
+          'TodoWrite',
+          'ToolSearch',
+          'Skill',
+          'NotebookEdit',
+          'mcp__agentlite__*',
+          // Allow tools from all custom MCP servers
+          ...Object.keys(containerInput.mcpServers ?? {}).map(
+            (name) => `mcp__${name}__*`,
           ),
-        ),
-      },
-      hooks: {
-        PreCompact: [
-          { hooks: [createPreCompactHook(containerInput.assistantName)] },
         ],
+        env: sdkEnv,
+        permissionMode: 'bypassPermissions',
+        allowDangerouslySkipPermissions: true,
+        settingSources: ['project', 'user'],
+        mcpServers: {
+          agentlite: {
+            command: 'node',
+            args: [mcpServerPath],
+            env: {
+              AGENTLITE_CHAT_JID: containerInput.chatJid,
+              AGENTLITE_GROUP_FOLDER: containerInput.groupFolder,
+              AGENTLITE_IS_MAIN: containerInput.isMain ? '1' : '0',
+              ...(containerInput.actionsAuth
+                ? {
+                    AGENTLITE_ACTIONS_URL: containerInput.actionsAuth.url,
+                    AGENTLITE_ACTIONS_TOKEN: containerInput.actionsAuth.token,
+                  }
+                : {}),
+            },
+          },
+          ...Object.fromEntries(
+            Object.entries(containerInput.mcpServers ?? {}).map(
+              ([name, cfg]) => [name, cfg],
+            ),
+          ),
+        },
+        hooks: {
+          PreCompact: [
+            { hooks: [createPreCompactHook(containerInput.assistantName)] },
+          ],
+        },
       },
-    },
-  })) {
-    messageCount++;
-    const msgType =
-      message.type === 'system'
-        ? `system/${(message as { subtype?: string }).subtype}`
-        : message.type;
-    log(`[msg #${messageCount}] type=${msgType}`);
+    })) {
+      messageCount++;
+      const msgType =
+        message.type === 'system'
+          ? `system/${(message as { subtype?: string }).subtype}`
+          : message.type;
+      log(`[msg #${messageCount}] type=${msgType}`);
 
-    // ── Internal bookkeeping (not forwarded) ────────────────────
-    if (message.type === 'assistant' && 'uuid' in message) {
-      lastAssistantUuid = (message as { uuid: string }).uuid;
-    }
-    if (message.type === 'system' && message.subtype === 'init') {
-      newSessionId = message.session_id;
-      log(`Session initialized: ${newSessionId}`);
-    }
+      // ── Internal bookkeeping (not forwarded) ────────────────────
+      if (message.type === 'assistant' && 'uuid' in message) {
+        lastAssistantUuid = (message as { uuid: string }).uuid;
+      }
+      if (message.type === 'system' && message.subtype === 'init') {
+        newSessionId = message.session_id;
+        log(`Session initialized: ${newSessionId}`);
+      }
 
-    // ── Forward every SDK message raw ─────────────────────────
-    const sdkSubtype =
-      message.type === 'system'
-        ? (message as { subtype?: string }).subtype
-        : undefined;
-    writeOutput({
-      type: 'sdk_message',
-      sdkType: message.type,
-      sdkSubtype,
-      message,
-    });
-
-    // ── Backward-compat: emit result for host message delivery ─
-    if (message.type === 'result') {
-      resultCount++;
-      const textResult =
-        'result' in message ? (message as { result?: string }).result : null;
-      log(
-        `Result #${resultCount}: subtype=${message.subtype}${textResult ? ` text=${textResult.slice(0, 200)}` : ''}`,
-      );
+      // ── Forward every SDK message raw ─────────────────────────
+      const sdkSubtype =
+        message.type === 'system'
+          ? (message as { subtype?: string }).subtype
+          : undefined;
       writeOutput({
-        type: 'result',
-        result: textResult || null,
-        newSessionId,
+        type: 'sdk_message',
+        sdkType: message.type,
+        sdkSubtype,
+        message,
       });
+
+      // ── Backward-compat: emit result for host message delivery ─
+      if (message.type === 'result') {
+        resultCount++;
+        const textResult =
+          'result' in message ? (message as { result?: string }).result : null;
+        log(
+          `Result #${resultCount}: subtype=${message.subtype}${textResult ? ` text=${textResult.slice(0, 200)}` : ''}`,
+        );
+        writeOutput({
+          type: 'result',
+          result: textResult || null,
+          newSessionId,
+        });
+      }
     }
+  } catch (err) {
+    ipcPolling = false;
+    throw new QueryAttemptError(
+      err instanceof Error ? err.message : String(err),
+      {
+        cause: err,
+        newSessionId,
+        lastAssistantUuid,
+        closedDuringQuery,
+        resultCount,
+      },
+    );
   }
 
   ipcPolling = false;
@@ -637,6 +695,67 @@ async function runQuery(
     `Query done. Messages: ${messageCount}, results: ${resultCount}, lastAssistantUuid: ${lastAssistantUuid || 'none'}, closedDuringQuery: ${closedDuringQuery}`,
   );
   return { newSessionId, lastAssistantUuid, closedDuringQuery };
+}
+
+async function runQuery(
+  prompt: string,
+  sessionId: string | undefined,
+  mcpServerPath: string,
+  containerInput: ContainerInput,
+  sdkEnv: Record<string, string | undefined>,
+  resumeAt?: string,
+): Promise<{
+  newSessionId?: string;
+  lastAssistantUuid?: string;
+  closedDuringQuery: boolean;
+}> {
+  let currentSessionId = sessionId;
+
+  writeOutput({
+    type: 'state',
+    state: 'active',
+    newSessionId: currentSessionId,
+    reason: 'query_started',
+  });
+
+  return withRetry(
+    async () => {
+      try {
+        const result = await runQueryAttempt(
+          prompt,
+          currentSessionId,
+          mcpServerPath,
+          containerInput,
+          sdkEnv,
+          resumeAt,
+        );
+        if (result.newSessionId) {
+          currentSessionId = result.newSessionId;
+        }
+        return result;
+      } catch (err) {
+        if (err instanceof QueryAttemptError && err.newSessionId) {
+          currentSessionId = err.newSessionId;
+        }
+        throw err;
+      }
+    },
+    {
+      maxRetries: containerInput.maxRetries,
+      onRetry: async (retry) => {
+        writeOutput({
+          type: 'retry',
+          kind: retry.kind,
+          error: retry.message,
+          delayMs: retry.delayMs,
+          attempt: retry.attempt,
+          maxRetries: retry.maxRetries,
+          newSessionId: currentSessionId,
+          statusCode: retry.statusCode,
+        });
+      },
+    },
+  );
 }
 
 async function main(): Promise<void> {
@@ -751,12 +870,23 @@ async function main(): Promise<void> {
       prompt = nextMessage;
     }
   } catch (err) {
+    const retry = getRetryDescriptor(err);
+    const maxRetries = normalizeMaxRetries(containerInput.maxRetries);
     const errorMessage = err instanceof Error ? err.message : String(err);
+    if (err instanceof QueryAttemptError && err.newSessionId) {
+      sessionId = err.newSessionId;
+    }
     log(`Agent error: ${errorMessage}`);
     writeOutput({
       type: 'error',
       newSessionId: sessionId,
       error: errorMessage,
+      kind: retry?.kind ?? 'runtime',
+      statusCode: retry?.statusCode,
+      retryable: retry !== null,
+      exhaustedRetries: retry !== null,
+      retriesAttempted: retry ? maxRetries : undefined,
+      maxRetries: retry ? maxRetries : undefined,
     });
     process.exit(1);
   }

@@ -9,6 +9,8 @@ export interface AgentEvents extends Record<string, any[]> {
   'message.in': [payload: MessageInEvent];
   'message.out': [payload: MessageOutEvent];
   'run.state': [payload: RunStateEvent];
+  'run.retry': [payload: RunRetryEvent];
+  'run.error': [payload: RunErrorEvent];
   'run.sdk_message': [payload: RunSdkMessageEvent];
   'run.tool': [payload: RunToolEvent];
   'run.tool_progress': [payload: RunToolProgressEvent];
@@ -83,6 +85,54 @@ export interface RunStateEvent {
   reason?: string;
   /** Exit code when the runtime reaches stopped. */
   exitCode?: number;
+}
+
+/** Claude API retry scheduled after a transient or rate-limit failure. */
+export interface RunRetryEvent {
+  /** Stable agent identifier. */
+  agentId: string;
+  /** Group/chat identifier. */
+  jid: string;
+  /** Retry category. */
+  kind: 'rate_limit' | 'transient';
+  /** Retry attempt number, starting at 1. */
+  attempt: number;
+  /** Maximum retries configured for the group. */
+  maxRetries: number;
+  /** Backoff delay in milliseconds. */
+  delayMs: number;
+  /** Backoff delay rounded up to whole seconds for UI copy. */
+  delaySeconds: number;
+  /** Best-effort upstream status code, when available. */
+  statusCode?: number;
+  /** Error message that triggered the retry. */
+  error: string;
+  /** ISO timestamp. */
+  timestamp: string;
+}
+
+/** Runtime error surfaced by the container or host. */
+export interface RunErrorEvent {
+  /** Stable agent identifier. */
+  agentId: string;
+  /** Group/chat identifier. */
+  jid: string;
+  /** Error category. */
+  kind: 'rate_limit' | 'transient' | 'runtime';
+  /** Error message. */
+  error: string;
+  /** Whether the runtime considered this retryable. */
+  retryable?: boolean;
+  /** Whether the configured retries were exhausted. */
+  exhaustedRetries?: boolean;
+  /** Number of retries already attempted. */
+  retriesAttempted?: number;
+  /** Maximum retries configured for the group. */
+  maxRetries?: number;
+  /** Best-effort upstream status code, when available. */
+  statusCode?: number;
+  /** ISO timestamp. */
+  timestamp: string;
 }
 
 /**
