@@ -197,9 +197,6 @@ function resolveUsageModel(
   if (currentModel && models.some(([model]) => model === currentModel)) {
     return currentModel;
   }
-  if (currentModel) {
-    return currentModel;
-  }
   if (models.length === 0) {
     return 'unknown';
   }

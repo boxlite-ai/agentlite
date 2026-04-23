@@ -27,6 +27,7 @@ describe('usage_get_summary action', () => {
   let platform: AgentLite;
   let agent: AgentWithHttpAndDb;
   let token: string | undefined;
+  let mainToken: string | undefined;
   let url: string | undefined;
 
   beforeEach(async () => {
@@ -41,6 +42,7 @@ describe('usage_get_summary action', () => {
     }
     url = info.url;
     token = agent.actionsHttp.mintContainerToken('test-group', false)?.token;
+    mainToken = agent.actionsHttp.mintContainerToken('main-group', true)?.token;
   });
 
   afterEach(async () => {
@@ -124,10 +126,50 @@ describe('usage_get_summary action', () => {
     return { status: res.status, result: json.result };
   }
 
+  async function callSummaryAsMain(payload?: Record<string, unknown>) {
+    const res = await fetch(`${url}/call`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${mainToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        name: 'usage_get_summary',
+        payload,
+      }),
+    });
+    const json = (await res.json()) as {
+      result: {
+        total_tokens: number;
+        prompt_tokens: number;
+        completion_tokens: number;
+        cache_read_tokens: number;
+        cache_write_tokens: number;
+        total_cost_usd: number | null;
+        request_count: number;
+        by_model: Array<{
+          model: string;
+          request_count: number;
+          prompt_tokens: number;
+          completion_tokens: number;
+          total_tokens: number;
+          cost_usd: number | null;
+        }>;
+        by_session: Array<{
+          session_id: string | null;
+          request_count: number;
+          total_tokens: number;
+          cost_usd: number | null;
+        }>;
+      };
+    };
+    return { status: res.status, result: json.result };
+  }
+
   it('returns all rows when no filters are provided', async () => {
     seedUsageRows();
 
-    const response = await callSummary();
+    const response = await callSummaryAsMain();
     expect(response.status).toBe(200);
     expect(response.result).toMatchObject({
       total_tokens: 900,
@@ -162,7 +204,7 @@ describe('usage_get_summary action', () => {
   it('filters rows by group_jid', async () => {
     seedUsageRows();
 
-    const response = await callSummary({ group_jid: 'group-1@g.us' });
+    const response = await callSummaryAsMain({ group_jid: 'group-1@g.us' });
     expect(response.status).toBe(200);
     expect(response.result).toMatchObject({
       total_tokens: 450,
@@ -182,7 +224,7 @@ describe('usage_get_summary action', () => {
   it('filters rows by since timestamp', async () => {
     seedUsageRows();
 
-    const response = await callSummary({ since: 1_500 });
+    const response = await callSummaryAsMain({ since: 1_500 });
     expect(response.status).toBe(200);
     expect(response.result).toMatchObject({
       total_tokens: 750,
@@ -196,7 +238,7 @@ describe('usage_get_summary action', () => {
   it('returns the correct by_model breakdown', async () => {
     seedUsageRows();
 
-    const response = await callSummary();
+    const response = await callSummaryAsMain();
     expect(response.status).toBe(200);
 
     const sonnet = response.result.by_model.find(
@@ -223,5 +265,56 @@ describe('usage_get_summary action', () => {
       total_tokens: 450,
     });
     expect(opus?.cost_usd).toBeCloseTo(0.01575);
+  });
+
+  it('non-main caller is scoped to its own group', async () => {
+    // Seed rows: one for 'test-group' (matches non-main token sourceGroup)
+    // and one for another group (should be hidden from non-main caller)
+    agent.db.recordTokenUsage({
+      group_jid: 'test-group',
+      session_id: 'session-local',
+      model: 'claude-haiku-4-5',
+      prompt_tokens: 50,
+      completion_tokens: 25,
+      latency_ms: 50,
+      ts: 1_000,
+    });
+    agent.db.recordTokenUsage({
+      group_jid: 'other-group',
+      session_id: 'session-other',
+      model: 'claude-opus-4-6',
+      prompt_tokens: 500,
+      completion_tokens: 250,
+      latency_ms: 200,
+      ts: 2_000,
+    });
+
+    // Non-main token is bound to 'test-group' — should only see its own rows
+    const response = await callSummary();
+    expect(response.status).toBe(200);
+    expect(response.result.request_count).toBe(1);
+    expect(response.result.total_tokens).toBe(75);
+    // Main token sees everything
+    const mainResponse = await callSummaryAsMain();
+    expect(mainResponse.result.request_count).toBe(2);
+  });
+
+  it('filters rows by model', async () => {
+    seedUsageRows();
+
+    const response = await callSummaryAsMain({ model: 'claude-opus-4-6' });
+    expect(response.status).toBe(200);
+    expect(response.result).toMatchObject({
+      total_tokens: 450,
+      prompt_tokens: 300,
+      completion_tokens: 150,
+      request_count: 1,
+    });
+    expect(response.result.by_model).toHaveLength(1);
+    expect(response.result.by_model[0]).toMatchObject({
+      model: 'claude-opus-4-6',
+      request_count: 1,
+      total_tokens: 450,
+    });
   });
 });
