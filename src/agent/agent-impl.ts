@@ -41,7 +41,7 @@ import { writeGroupsSnapshot } from '../container-runner.js';
 import type { ZodRawShape } from 'zod';
 
 import { startIpcWatcher } from '../ipc.js';
-import { ActionsHttp } from './actions-http.js';
+import { ActionsHttp, registerBuiltinActions } from './actions-http.js';
 import {
   assertCustomActionName,
   type ActionContext,
@@ -526,6 +526,11 @@ export class AgentImpl
       emit: this.emit.bind(
         this,
       ) as import('../task-scheduler.js').TaskEventEmitter,
+    });
+
+    registerBuiltinActions(this, {
+      db: this.db,
+      getRegisteredGroups: () => this.registeredGroups,
     });
 
     // Outbound ACP client — only constructed if peers are configured.

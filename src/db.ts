@@ -82,6 +82,13 @@ export function createSchema(
       container_config TEXT,
       requires_trigger INTEGER DEFAULT 1
     );
+    CREATE TABLE IF NOT EXISTS agent_memory (
+      group_jid  TEXT    NOT NULL,
+      key        TEXT    NOT NULL,
+      value      TEXT,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (group_jid, key)
+    );
 
   `);
 
@@ -564,6 +571,39 @@ export class AgentDb {
       result[row.group_folder] = row.session_id;
     }
     return result;
+  }
+
+  // --- Agent memory ---
+
+  memoryGet(groupJid: string, key: string): string | null {
+    const row = this.db
+      .prepare('SELECT value FROM agent_memory WHERE group_jid = ? AND key = ?')
+      .get(groupJid, key) as { value: string | null } | undefined;
+    return row?.value ?? null;
+  }
+
+  memorySet(groupJid: string, key: string, value: string | null): void {
+    if (value === null) {
+      this.db
+        .prepare('DELETE FROM agent_memory WHERE group_jid = ? AND key = ?')
+        .run(groupJid, key);
+      return;
+    }
+
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO agent_memory (group_jid, key, value, updated_at)
+         VALUES (?, ?, ?, unixepoch())`,
+      )
+      .run(groupJid, key, value);
+  }
+
+  memoryList(groupJid: string): Array<{ key: string; value: string | null }> {
+    return this.db
+      .prepare(
+        'SELECT key, value FROM agent_memory WHERE group_jid = ? ORDER BY key',
+      )
+      .all(groupJid) as Array<{ key: string; value: string | null }>;
   }
 
   // --- Registered groups ---
