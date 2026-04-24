@@ -280,39 +280,37 @@ describe('tool usage analytics', () => {
 
     vi.mocked(runContainerAgent).mockImplementation(
       async (_group, _input, _rc, _onProcess, onOutput) => {
-        for (let i = 1; i <= 5; i += 1) {
-          await onOutput?.(
-            sdkMsg('assistant', {
-              uuid: `a-${i}`,
-              message: {
-                content: [
-                  {
-                    type: 'tool_use',
-                    name: 'Bash',
-                    id: `tool-${i}`,
-                    input: { command: `step-${i}` },
-                  },
-                ],
-              },
-            }),
-          );
-          vi.advanceTimersByTime(1);
-          await onOutput?.(
-            sdkMsg('user', {
-              uuid: `u-${i}`,
-              message: {
-                content: [
-                  {
-                    type: 'tool_result',
-                    tool_use_id: `tool-${i}`,
-                    is_error: i !== 5,
-                    content: i !== 5 ? `failure ${i}` : 'ok',
-                  },
-                ],
-              },
-            }),
-          );
-        }
+        await onOutput?.(
+          sdkMsg('assistant', {
+            uuid: 'a-1',
+            message: {
+              content: [
+                {
+                  type: 'tool_use',
+                  name: 'Bash',
+                  id: 'tool-1',
+                  input: { command: 'step-1' },
+                },
+              ],
+            },
+          }),
+        );
+        vi.advanceTimersByTime(1);
+        await onOutput?.(
+          sdkMsg('user', {
+            uuid: 'u-1',
+            message: {
+              content: [
+                {
+                  type: 'tool_result',
+                  tool_use_id: 'tool-1',
+                  is_error: true,
+                  content: 'failure 1',
+                },
+              ],
+            },
+          }),
+        );
         await onOutput?.({
           type: 'state',
           state: 'stopped',
@@ -328,16 +326,16 @@ describe('tool usage analytics', () => {
     await expect(db.getToolUsageSummary()).resolves.toEqual([
       expect.objectContaining({
         toolName: 'Bash',
-        callCount: 5,
-        successCount: 1,
-        successRate: 0.2,
+        callCount: 1,
+        successCount: 0,
+        successRate: 0,
       }),
     ]);
     expect(alerts).toHaveLength(1);
     expect(alerts[0]).toMatchObject({
       toolName: 'Bash',
-      errorRate: 0.8,
-      callCount: 5,
+      errorRate: 1,
+      callCount: 1,
       windowHours: 1,
     });
     expect(alerts[0]).not.toHaveProperty('agentId');

@@ -377,7 +377,7 @@ export class MessageProcessor {
     });
     const row = rows[0];
     const errorRate = row ? 1 - row.successRate : 0;
-    if (row && row.callCount >= 5 && errorRate > 0.2) {
+    if (row && row.callCount > 0 && errorRate > 0.2) {
       logger.warn(
         { toolName, callCount: row.callCount, errorRate, windowHours: 1 },
         'Tool error rate exceeded 20% in the last hour',
