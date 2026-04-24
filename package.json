@@ -38,7 +38,8 @@
     }
   },
   "scripts": {
-    "build": "tsc && tsup",
+    "build": "tsc && tsup && npm run build:agent-runner",
+    "build:agent-runner": "npm --prefix container/agent-runner ci && npm --prefix container/agent-runner run build",
     "start": "node dist/cli.js",
     "dev": "tsx src/cli.ts | pino-pretty",
     "typecheck": "tsc --noEmit",
@@ -51,7 +52,7 @@
     "test:e2e:tasks": "tsx scripts/test-task-sdk-e2e.ts",
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",
-    "test": "vitest run",
+    "test": "npm run build && vitest run",
     "test:watch": "vitest"
   },
   "dependencies": {
