@@ -492,6 +492,7 @@ export class AgentImpl
     this.schedulerHandle = startSchedulerLoop({
       agentId: this.id,
       assistantName: this.config.assistantName,
+      agentBackend: this.config.backend,
       schedulerPollInterval: this.runtimeConfig.schedulerPollInterval,
       timezone: this.runtimeConfig.timezone,
       runtimeConfig: this.runtimeConfig,
