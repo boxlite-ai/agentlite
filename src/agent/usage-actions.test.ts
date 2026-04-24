@@ -268,8 +268,6 @@ describe('usage_get_summary action', () => {
   });
 
   it('non-main caller is scoped to its own group', async () => {
-    // Seed rows: one for 'test-group' (matches non-main token sourceGroup)
-    // and one for another group (should be hidden from non-main caller)
     agent.db.recordTokenUsage({
       group_jid: 'test-group',
       session_id: 'session-local',
@@ -289,12 +287,13 @@ describe('usage_get_summary action', () => {
       ts: 2_000,
     });
 
-    // Non-main token is bound to 'test-group' — should only see its own rows
-    const response = await callSummary();
+    const response = await callSummary({ group_jid: 'other-group' });
     expect(response.status).toBe(200);
     expect(response.result.request_count).toBe(1);
     expect(response.result.total_tokens).toBe(75);
-    // Main token sees everything
+    expect(response.result.by_session).toHaveLength(1);
+    expect(response.result.by_session[0]?.session_id).toBe('session-local');
+
     const mainResponse = await callSummaryAsMain();
     expect(mainResponse.result.request_count).toBe(2);
   });
@@ -302,18 +301,18 @@ describe('usage_get_summary action', () => {
   it('filters rows by model', async () => {
     seedUsageRows();
 
-    const response = await callSummaryAsMain({ model: 'claude-opus-4-6' });
+    const response = await callSummaryAsMain({ model: 'claude-sonnet-4-6' });
     expect(response.status).toBe(200);
     expect(response.result).toMatchObject({
       total_tokens: 450,
       prompt_tokens: 300,
       completion_tokens: 150,
-      request_count: 1,
+      request_count: 2,
     });
     expect(response.result.by_model).toHaveLength(1);
     expect(response.result.by_model[0]).toMatchObject({
-      model: 'claude-opus-4-6',
-      request_count: 1,
+      model: 'claude-sonnet-4-6',
+      request_count: 2,
       total_tokens: 450,
     });
   });

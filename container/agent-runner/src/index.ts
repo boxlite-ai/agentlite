@@ -186,14 +186,11 @@ function log(message: string): void {
   console.error(`[agent-runner] ${message}`);
 }
 
-function resolveUsageModel(
-  currentModel: string | undefined,
+export function resolveUsageModel(
+  _currentModel: string | undefined,
   modelUsage: SDKResultMessage['modelUsage'],
 ): string | null {
   const models = Object.entries(modelUsage);
-  if (currentModel) {
-    return models.some(([model]) => model === currentModel) ? currentModel : null;
-  }
   if (models.length === 1) {
     return models[0]![0];
   }
@@ -855,4 +852,9 @@ async function main(): Promise<void> {
   }
 }
 
-main();
+if (
+  process.argv[1] &&
+  fileURLToPath(import.meta.url) === path.resolve(process.argv[1])
+) {
+  void main();
+}
