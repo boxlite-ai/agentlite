@@ -57,4 +57,8 @@ describe('resolveUsageModel', () => {
   it('returns null when no usage model is available', () => {
     expect(resolveUsageModel(undefined, {})).toBeNull();
   });
+
+  it('returns null when currentModel is not present and modelUsage is empty', () => {
+    expect(resolveUsageModel('claude-opus-4-6', {})).toBeNull();
+  });
 });
