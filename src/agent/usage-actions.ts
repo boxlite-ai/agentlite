@@ -25,7 +25,9 @@ export function registerUsageActions(agent: Agent, db: AgentDb): void {
         ),
     },
     async (args, ctx) => {
-      const effectiveFilters = ctx.isMain ? args : { ...args, group_jid: ctx.sourceGroup };
+      const effectiveFilters = ctx.isMain
+        ? args
+        : { ...args, group_jid: ctx.sourceGroup };
       return db.getTokenUsageSummary(effectiveFilters);
     },
   );

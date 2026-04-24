@@ -189,13 +189,13 @@ function log(message: string): void {
 function resolveUsageModel(
   currentModel: string | undefined,
   modelUsage: SDKResultMessage['modelUsage'],
-): string {
+): string | null {
   const models = Object.entries(modelUsage);
+  if (currentModel) {
+    return models.some(([model]) => model === currentModel) ? currentModel : null;
+  }
   if (models.length === 1) {
     return models[0]![0];
-  }
-  if (currentModel && models.some(([model]) => model === currentModel)) {
-    return currentModel;
   }
   if (models.length === 0) {
     return 'unknown';
@@ -217,18 +217,23 @@ function captureTokenUsageSummary(params: {
   currentModel: string | undefined;
   queryStartedAt: number;
   message: SDKResultMessage;
-}): ContainerTokenUsageOutput['usage'] {
+}): ContainerTokenUsageOutput['usage'] | null {
   const usage = params.message.usage;
   const promptTokens = usage.input_tokens ?? 0;
   const completionTokens = usage.output_tokens ?? 0;
   const cacheReadTokens = usage.cache_read_input_tokens ?? 0;
   const cacheWriteTokens = usage.cache_creation_input_tokens ?? 0;
   const ts = Date.now();
+  const model = resolveUsageModel(params.currentModel, params.message.modelUsage);
+
+  if (!model) {
+    return null;
+  }
 
   return {
     group_jid: params.groupJid,
     session_id: params.sessionId ?? null,
-    model: resolveUsageModel(params.currentModel, params.message.modelUsage),
+    model,
     prompt_tokens: promptTokens,
     completion_tokens: completionTokens,
     total_tokens: promptTokens + completionTokens,
@@ -693,16 +698,19 @@ async function runQuery(
     // ── Backward-compat: emit result for host message delivery ─
     if (message.type === 'result') {
       resultCount++;
-      writeOutput({
-        type: 'token_usage',
-        usage: captureTokenUsageSummary({
-          groupJid: containerInput.chatJid,
-          sessionId: newSessionId ?? sessionId,
-          currentModel,
-          queryStartedAt,
-          message,
-        }),
+      const usageSummary = captureTokenUsageSummary({
+        groupJid: containerInput.chatJid,
+        sessionId: newSessionId ?? sessionId,
+        currentModel,
+        queryStartedAt,
+        message,
       });
+      if (usageSummary) {
+        writeOutput({
+          type: 'token_usage',
+          usage: usageSummary,
+        });
+      }
 
       const textResult =
         'result' in message ? (message as { result?: string }).result : null;
