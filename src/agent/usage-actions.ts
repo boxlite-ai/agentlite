@@ -25,8 +25,9 @@ export function registerUsageActions(agent: Agent, db: AgentDb): void {
         ),
     },
     async (args, ctx) => {
-      const effectiveGroupJid = ctx.isMain ? args.group_jid : ctx.sourceGroup;
-      const queryArgs = { ...args, group_jid: effectiveGroupJid };
+      const queryArgs = ctx.isMain
+        ? args
+        : { ...args, group_jid: ctx.sourceGroup };
       return db.getTokenUsageSummary(queryArgs);
     },
   );
