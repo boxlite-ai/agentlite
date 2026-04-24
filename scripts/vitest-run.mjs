@@ -2,6 +2,17 @@ import { spawnSync } from 'node:child_process';
 
 const args = [];
 const rawArgs = process.argv.slice(2);
+const npmTestPathPattern = process.env.npm_config_testpathpattern;
+
+if (
+  npmTestPathPattern &&
+  !rawArgs.some(
+    (arg) =>
+      arg === '--testPathPattern' || arg?.startsWith('--testPathPattern='),
+  )
+) {
+  args.push(npmTestPathPattern);
+}
 
 for (let i = 0; i < rawArgs.length; i += 1) {
   const arg = rawArgs[i];
