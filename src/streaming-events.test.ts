@@ -376,4 +376,188 @@ describe('run.partial_content (text token deltas)', () => {
     expect(partialEvents.map((e) => e.delta)).toEqual(['Hello', ' ', 'world', '!']);
     expect(doneEvents).toHaveLength(1);
   });
+
+  // ── Reconnection tests (design §4, tests 6 & 7) ───────────────
+
+  it('replays buffered deltas in order on reconnect (ring-buffer replay, design test 6)', async () => {
+    const agent = setupAgent();
+
+    vi.mocked(runContainerAgent).mockImplementation(
+      async (_group, _input, _rc, _onProcess, onOutput) => {
+        await onOutput?.(
+          streamEvent({
+            type: 'content_block_delta',
+            index: 0,
+            delta: { type: 'text_delta', text: 'chunk1' },
+          }),
+        );
+        await onOutput?.(
+          streamEvent({
+            type: 'content_block_delta',
+            index: 0,
+            delta: { type: 'text_delta', text: 'chunk2' },
+          }),
+        );
+        // Container exits without message_stop (mid-stream crash)
+        await onOutput?.(stoppedState());
+        return { status: 'success', result: null };
+      },
+    );
+
+    // Collect events during initial streaming
+    const streamingEvents: AgentPartialContentEvent[] = [];
+    agent.on('run.partial_content', (evt) => streamingEvents.push(evt));
+
+    await agent.processGroupMessages('mock:stream');
+
+    // Verify initial streaming events
+    expect(streamingEvents).toHaveLength(2);
+
+    // Simulate UI reconnect: clear streaming events and call resume
+    streamingEvents.length = 0;
+    agent.resumePartialContent('mock:stream');
+
+    // Ring buffer should replay the two buffered deltas in order
+    expect(streamingEvents).toHaveLength(2);
+    expect(streamingEvents[0].delta).toBe('chunk1');
+    expect(streamingEvents[1].delta).toBe('chunk2');
+    expect(streamingEvents[0].jid).toBe('mock:stream');
+  });
+
+  it('emits buffer_evicted on reconnect after stream completed normally (design test 7)', async () => {
+    const agent = setupAgent();
+
+    vi.mocked(runContainerAgent).mockImplementation(
+      async (_group, _input, _rc, _onProcess, onOutput) => {
+        await onOutput?.(
+          streamEvent({
+            type: 'content_block_delta',
+            index: 0,
+            delta: { type: 'text_delta', text: 'complete response' },
+          }),
+        );
+        // Stream completes normally — ring buffer is cleared on message_stop
+        await onOutput?.(streamEvent({ type: 'message_stop' }));
+        await onOutput?.(stoppedState());
+        return { status: 'success', result: null };
+      },
+    );
+
+    await agent.processGroupMessages('mock:stream');
+
+    // Stream is done; buffer was cleared on message_stop
+    const interruptedEvents: AgentPartialContentInterruptedEvent[] = [];
+    agent.on('run.partial_content.interrupted', (evt) => interruptedEvents.push(evt));
+
+    // Reconnect after stream completed → buffer_evicted
+    agent.resumePartialContent('mock:stream');
+
+    expect(interruptedEvents).toHaveLength(1);
+    expect(interruptedEvents[0]).toMatchObject({
+      jid: 'mock:stream',
+      reason: 'buffer_evicted',
+    });
+    expect(typeof interruptedEvents[0].timestamp).toBe('string');
+  });
+
+  // ── Concurrent streams (design test 8) ────────────────────────
+
+  it('two concurrent streams: each jid receives its own events and both get interrupted on drain', async () => {
+    const jidA = 'mock:stream-a';
+    const jidB = 'mock:stream-b';
+
+    // Set up agent with two registered jids and matching channel
+    const agent = createAgent('concurrent-test');
+    agent._setDbForTests(db);
+    const twoJidGroup: RegisteredGroup = {
+      ...MAIN_GROUP,
+      trigger: 'always',
+    };
+    const groupB: RegisteredGroup = {
+      name: 'GroupB',
+      folder: 'group-b',
+      trigger: 'always',
+      added_at: '2024-01-01T00:00:00.000Z',
+      isMain: false,
+      requiresTrigger: false,
+    };
+    agent._setRegisteredGroups({ [jidA]: twoJidGroup, [jidB]: groupB });
+    (agent as unknown as { _started: boolean })._started = true;
+
+    const twoJidChannel = {
+      name: 'mock-two',
+      async connect(): Promise<void> {},
+      async disconnect(): Promise<void> {},
+      async sendMessage(): Promise<void> {},
+      isConnected(): boolean { return true; },
+      ownsJid(jid: string): boolean { return jid === jidA || jid === jidB; },
+      async setTyping(): Promise<void> {},
+    };
+    (agent as unknown as { channels: Map<string, Channel> }).channels.set('mock-two', twoJidChannel);
+
+    // Seed messages for both jids
+    db.storeChatMetadata(jidA, '2026-04-13T00:00:00.000Z', 'Chat A');
+    db.storeMessage({ id: 'msg-a', chat_jid: jidA, sender: 'u1', sender_name: 'U1', content: 'go', timestamp: '2026-04-13T00:00:01.000Z', is_from_me: false });
+    db.storeChatMetadata(jidB, '2026-04-13T00:00:00.000Z', 'Chat B');
+    db.storeMessage({ id: 'msg-b', chat_jid: jidB, sender: 'u2', sender_name: 'U2', content: 'go', timestamp: '2026-04-13T00:00:01.000Z', is_from_me: false });
+
+    // Coordination: jidA waits until jidB has also emitted its delta before exiting
+    let resolveJidADeltaSent: () => void;
+    let resolveJidBDeltaSent: () => void;
+    const jidADeltaSent = new Promise<void>((r) => { resolveJidADeltaSent = r; });
+    const jidBDeltaSent = new Promise<void>((r) => { resolveJidBDeltaSent = r; });
+
+    vi.mocked(runContainerAgent)
+      .mockImplementationOnce(async (_g, _i, _r, _op, onOutput) => {
+        // jidA emits its delta, signals jidB, then waits for jidB before stopping
+        await onOutput?.(streamEvent({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'tokenA' } }));
+        resolveJidADeltaSent!();
+        await jidBDeltaSent; // wait for jidB to have added itself to streamingJids
+        await onOutput?.(stoppedState());
+        return { status: 'success', result: null };
+      })
+      .mockImplementationOnce(async (_g, _i, _r, _op, onOutput) => {
+        // jidB waits for jidA's delta, then emits its own, then stops
+        await jidADeltaSent;
+        await onOutput?.(streamEvent({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'tokenB' } }));
+        resolveJidBDeltaSent!();
+        await onOutput?.(stoppedState());
+        return { status: 'success', result: null };
+      });
+
+    // Track events per jid
+    const partialA: AgentPartialContentEvent[] = [];
+    const partialB: AgentPartialContentEvent[] = [];
+    const interruptedA: AgentPartialContentInterruptedEvent[] = [];
+    const interruptedB: AgentPartialContentInterruptedEvent[] = [];
+
+    agent.on('run.partial_content', (evt) => {
+      if (evt.jid === jidA) partialA.push(evt);
+      else if (evt.jid === jidB) partialB.push(evt);
+    });
+    agent.on('run.partial_content.interrupted', (evt) => {
+      if (evt.jid === jidA) interruptedA.push(evt);
+      else if (evt.jid === jidB) interruptedB.push(evt);
+    });
+
+    // Run both concurrently
+    await Promise.all([
+      agent.processGroupMessages(jidA),
+      agent.processGroupMessages(jidB),
+    ]);
+
+    // Each jid received only its own partial_content event
+    expect(partialA).toHaveLength(1);
+    expect(partialA[0].delta).toBe('tokenA');
+    expect(partialA[0].jid).toBe(jidA);
+    expect(partialB).toHaveLength(1);
+    expect(partialB[0].delta).toBe('tokenB');
+    expect(partialB[0].jid).toBe(jidB);
+
+    // drainStreamingJids must have emitted interrupted for both jids
+    expect(interruptedA).toHaveLength(1);
+    expect(interruptedA[0].reason).toBe('container_exit');
+    expect(interruptedB).toHaveLength(1);
+    expect(interruptedB[0].reason).toBe('container_exit');
+  });
 });

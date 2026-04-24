@@ -46,6 +46,13 @@ export class MessageProcessor {
   /** jids that currently have an in-flight streaming turn. */
   private streamingJids = new Set<string>();
 
+  /** Per-jid ring buffer for reconnection replay (last 2 KB of text deltas). */
+  private streamingRingBuffer = new Map<
+    string,
+    { deltas: string[]; totalBytes: number; evicted: boolean }
+  >();
+  private static readonly RING_BUFFER_SIZE_BYTES = 2048;
+
   constructor(
     private readonly ctx: AgentContext,
     private readonly channelMgr: ChannelManager,
@@ -64,6 +71,51 @@ export class MessageProcessor {
       });
     }
     this.streamingJids.clear();
+  }
+
+  /** Append a text delta to the per-jid ring buffer, trimming oldest entries to stay within 2 KB. */
+  private appendToRingBuffer(jid: string, delta: string): void {
+    let buf = this.streamingRingBuffer.get(jid);
+    if (!buf) {
+      buf = { deltas: [], totalBytes: 0, evicted: false };
+      this.streamingRingBuffer.set(jid, buf);
+    }
+    buf.deltas.push(delta);
+    buf.totalBytes += delta.length;
+    if (buf.totalBytes > MessageProcessor.RING_BUFFER_SIZE_BYTES) {
+      buf.evicted = true;
+      while (buf.totalBytes > MessageProcessor.RING_BUFFER_SIZE_BYTES && buf.deltas.length > 0) {
+        buf.totalBytes -= buf.deltas[0].length;
+        buf.deltas.shift();
+      }
+    }
+  }
+
+  /**
+   * Replay buffered deltas for a jid that reconnected mid-stream.
+   * Emits run.partial_content for each buffered delta, or run.partial_content.interrupted
+   * (reason: 'buffer_evicted') if the buffer was overflowed or the stream already completed.
+   */
+  resumePartialContent(jid: string): void {
+    const buf = this.streamingRingBuffer.get(jid);
+    const now = new Date().toISOString();
+    if (!buf || buf.evicted || buf.deltas.length === 0) {
+      this.ctx.emit('run.partial_content.interrupted', {
+        agentId: this.ctx.id,
+        jid,
+        reason: 'buffer_evicted',
+        timestamp: now,
+      });
+      return;
+    }
+    for (const delta of buf.deltas) {
+      this.ctx.emit('run.partial_content', {
+        agentId: this.ctx.id,
+        jid,
+        delta,
+        timestamp: now,
+      });
+    }
   }
 
   /** Start the message polling loop. Returns promise that resolves when stopped. */
@@ -259,6 +311,7 @@ export class MessageProcessor {
                   }),
                   timestamp: now,
                 });
+                this.appendToRingBuffer(chatJid, streamEvent.delta.text);
                 this.streamingJids.add(chatJid);
               } else if (streamEvent.delta?.type === 'input_json_delta') {
                 this.ctx.emit('run.partial_tool_call', {
@@ -270,16 +323,21 @@ export class MessageProcessor {
                   }),
                   timestamp: now,
                 });
+                this.appendToRingBuffer(chatJid, streamEvent.delta.partial_json);
                 this.streamingJids.add(chatJid);
               }
             }
             if (streamEvent?.type === 'message_stop') {
-              this.ctx.emit('run.partial_content.done', {
-                agentId: this.ctx.id,
-                jid: chatJid,
-                timestamp: now,
-              });
-              this.streamingJids.delete(chatJid);
+              if (this.streamingJids.has(chatJid)) {
+                this.ctx.emit('run.partial_content.done', {
+                  agentId: this.ctx.id,
+                  jid: chatJid,
+                  timestamp: now,
+                });
+                this.streamingJids.delete(chatJid);
+              }
+              // Clear ring buffer — stream completed normally; no replay possible
+              this.streamingRingBuffer.delete(chatJid);
             }
           }
 

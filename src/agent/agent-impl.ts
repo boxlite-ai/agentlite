@@ -588,6 +588,11 @@ export class AgentImpl
     return this.messageMgr.processGroupMessages(chatJid);
   }
 
+  /** @internal — delegates to MessageProcessor. Used by tests. */
+  resumePartialContent(jid: string): void {
+    this.messageMgr.resumePartialContent(jid);
+  }
+
   /** @internal — delegates to ChannelManager. */
   async sendOutboundMessage(
     jid: string,
