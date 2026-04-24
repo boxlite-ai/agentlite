@@ -11,9 +11,12 @@ import {
 } from './config_cli.js';
 import { createAgentLite } from './api/sdk.js';
 import { telegram } from './api/channels/telegram.js';
+import { prePullCodeRunImages } from './actions/index.js';
 
 installProcessHandlers();
 loadEnvConfig();
+
+prePullCodeRunImages();
 
 async function main(): Promise<void> {
   const platformOpts = buildOptionsFromEnv();

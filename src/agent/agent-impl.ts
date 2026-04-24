@@ -61,6 +61,7 @@ import { ChannelManager } from './channel-manager.js';
 import { GroupManager } from './group-manager.js';
 import { TaskManager } from './task-manager.js';
 import { MessageProcessor } from './message-processor.js';
+import { registerBuiltinActions } from '../actions/index.js';
 
 export { type Agent };
 
@@ -138,6 +139,7 @@ export class AgentImpl
       this.groupMgr,
       this.taskMgr,
     );
+    registerBuiltinActions(this.actions);
   }
 
   // ─── Identity ───────────────────────────────────────────────────
