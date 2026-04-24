@@ -309,7 +309,9 @@ export function resolveUsageModel(
   modelUsage: SDKResultMessage['modelUsage'],
 ): string | null {
   if (currentModel) {
-    return currentModel;
+    return Object.prototype.hasOwnProperty.call(modelUsage, currentModel)
+      ? currentModel
+      : null;
   }
 
   const models = Object.entries(modelUsage);
@@ -317,17 +319,15 @@ export function resolveUsageModel(
     return models[0]![0];
   }
   if (models.length === 0) {
-    return 'unknown';
+    return null;
   }
 
-  return models
-    .slice()
-    .sort((a, b) => {
-      const totalA = a[1].inputTokens + a[1].outputTokens;
-      const totalB = b[1].inputTokens + b[1].outputTokens;
-      if (totalA !== totalB) return totalB - totalA;
-      return a[0].localeCompare(b[0]);
-    })[0]![0];
+  return models.slice().sort((a, b) => {
+    const totalA = a[1].inputTokens + a[1].outputTokens;
+    const totalB = b[1].inputTokens + b[1].outputTokens;
+    if (totalA !== totalB) return totalB - totalA;
+    return a[0].localeCompare(b[0]);
+  })[0]![0];
 }
 
 function captureTokenUsageSummary(params: {
@@ -343,7 +343,10 @@ function captureTokenUsageSummary(params: {
   const cacheReadTokens = usage.cache_read_input_tokens ?? 0;
   const cacheWriteTokens = usage.cache_creation_input_tokens ?? 0;
   const ts = Date.now();
-  const model = resolveUsageModel(params.currentModel, params.message.modelUsage);
+  const model = resolveUsageModel(
+    params.currentModel,
+    params.message.modelUsage,
+  );
 
   if (!model) {
     return null;
