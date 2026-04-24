@@ -59,6 +59,39 @@ export interface AcpOptions {
   peers?: AcpPeerConfig[];
 }
 
+/** Configures a webhook route — maps an event type to a target group JID. */
+export interface WebhookRoute {
+  /** Event type value to match (e.g. "pull_request", "push"). */
+  eventType: string;
+  /** JID of the registered group that should receive the message. */
+  targetJid: string;
+}
+
+/** Webhook server configuration. */
+export interface WebhookConfig {
+  /**
+   * Port to listen on. Default: 3456.
+   * Set to 0 for a kernel-assigned port (useful in tests).
+   */
+  port?: number;
+  /**
+   * Host to bind to. Default: '127.0.0.1' (loopback only).
+   * Set to '0.0.0.0' for LAN access.
+   */
+  host?: string;
+  /**
+   * Shared secret for HMAC-SHA256 signature verification.
+   * If omitted, signature verification is skipped (not recommended for production).
+   */
+  secret?: string;
+  /**
+   * Event-type → JID routing table.
+   * Applied when X-Event-Type (or X-GitHub-Event / X-Slack-Event) header is present.
+   * Falls back to the JID in the URL path if no route matches.
+   */
+  routes?: WebhookRoute[];
+}
+
 /** Options for creating an Agent. */
 export interface AgentOptions {
   /** Agent-specific data directory. Persisted in the platform registry. Default: {base}/agents/{name} */
@@ -83,4 +116,6 @@ export interface AgentOptions {
    *   - inbound `agentlite acp` CLI subcommand (expose this agent over stdio)
    */
   acp?: AcpOptions;
+  /** Webhook server configuration. When set, starts a local webhook HTTP server. */
+  webhook?: WebhookConfig;
 }

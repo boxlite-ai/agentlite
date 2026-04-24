@@ -182,12 +182,18 @@ export class MessageProcessor {
     if (missedMessages.length === 0) return true;
 
     if (!isMainGroup && group.requiresTrigger !== false) {
-      const hasTrigger = hasWakeTrigger(
-        missedMessages,
-        chatJid,
-        this.ctx.config.triggerPattern,
+      // Webhook-injected messages bypass the trigger check (sender === 'webhook').
+      const hasWebhookMessage = missedMessages.some(
+        (m) => m.sender === 'webhook',
       );
-      if (!hasTrigger) return true;
+      if (!hasWebhookMessage) {
+        const hasTrigger = hasWakeTrigger(
+          missedMessages,
+          chatJid,
+          this.ctx.config.triggerPattern,
+        );
+        if (!hasTrigger) return true;
+      }
     }
 
     const prompt = formatMessages(

@@ -6,6 +6,7 @@
  */
 
 import fs from 'fs';
+import crypto from 'crypto';
 import { EventEmitter } from 'events';
 
 import type { TypedEmitter } from '../typed-emitter.js';
@@ -55,6 +56,7 @@ import { startSchedulerLoop } from '../task-scheduler.js';
 import path from 'path';
 import type { Agent } from '../api/agent.js';
 import type { McpServerConfig } from '../api/options.js';
+import { WebhookServer } from '../webhook-server.js';
 import type { AgentContext } from './agent-context.js';
 import type { AgentRegistryDb } from './registry-db.js';
 import { ChannelManager } from './channel-manager.js';
@@ -104,6 +106,7 @@ export class AgentImpl
   readonly actionsHttp = new ActionsHttp(() => this.actions);
   /** Outbound ACP (Zed Agent Client Protocol) client; null unless opts.acp.peers is set. */
   acpClient: AcpOutboundClient | null = null;
+  private _webhookServer: WebhookServer | null = null;
 
   // ─── Managers ───────────────────────────────────────────────────
   private channelMgr: ChannelManager;
@@ -397,6 +400,27 @@ export class AgentImpl
     );
   }
 
+  private injectWebhookMessage(jid: string, content: string): void {
+    const group = this.registeredGroups[jid];
+    if (!group) {
+      logger.warn({ jid }, '[WebhookServer] Cannot inject message for unregistered JID');
+      return;
+    }
+    const timestamp = new Date().toISOString();
+    this.db.storeChatMetadata(jid, timestamp, group.name);
+    this.db.storeMessageDirect({
+      id: `webhook-${Date.now()}-${crypto.randomUUID()}`,
+      chat_jid: jid,
+      sender: 'webhook',
+      sender_name: 'Webhook',
+      content,
+      timestamp,
+      is_from_me: false,
+      is_bot_message: false,
+    });
+    this.queue.enqueueMessageCheck(jid);
+  }
+
   private async injectAcpNotice(jid: string, text: string): Promise<void> {
     const group = this.registeredGroups[jid];
     if (!group) {
@@ -463,6 +487,16 @@ export class AgentImpl
     }
 
     await this.actionsHttp.start();
+
+    if (this._options?.webhook) {
+      this._webhookServer = new WebhookServer(
+        this._options.webhook,
+        (jid, content) => this.injectWebhookMessage(jid, content),
+        () => new Set(Object.keys(this.registeredGroups)),
+      );
+      await this._webhookServer.start();
+    }
+
     this.startSubsystems();
     this.emit('started');
   }
@@ -471,6 +505,7 @@ export class AgentImpl
     this._stopping = true;
     this.ipcHandle?.stop();
     this.schedulerHandle?.stop();
+    await this._webhookServer?.stop();
     await this.actionsHttp.stop();
     await this.messageMgr.waitForStop();
     if (this.acpClient) {
