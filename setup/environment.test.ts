@@ -118,4 +118,3 @@ describe('channel auth detection', () => {
     expect(hasAuth('/tmp/nonexistent_auth_dir_xyz')).toBe(false);
   });
 });
-

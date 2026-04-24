@@ -38,7 +38,9 @@ export async function run(_args: string[]): Promise<void> {
       const output = execSync('launchctl list', { encoding: 'utf-8' });
       if (output.includes('com.agentlite')) {
         // Check if it has a PID (actually running)
-        const line = output.split('\n').find((l) => l.includes('com.agentlite'));
+        const line = output
+          .split('\n')
+          .find((l) => l.includes('com.agentlite'));
         if (line) {
           const pidField = line.trim().split(/\s+/)[0];
           service = pidField !== '-' && pidField ? 'running' : 'stopped';
@@ -97,7 +99,11 @@ export async function run(_args: string[]): Promise<void> {
   const envFile = path.join(projectRoot, '.env');
   if (fs.existsSync(envFile)) {
     const envContent = fs.readFileSync(envFile, 'utf-8');
-    if (/^(CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY|ONECLI_URL)=/m.test(envContent)) {
+    if (
+      /^(CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY|ONECLI_URL)=/m.test(
+        envContent,
+      )
+    ) {
       credentials = 'configured';
     }
   }

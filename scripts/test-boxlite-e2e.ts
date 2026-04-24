@@ -30,7 +30,10 @@ fs.mkdirSync(dataDir, { recursive: true });
 // Create a minimal CLAUDE.md for the test group
 const claudeMd = path.join(testGroupDir, 'CLAUDE.md');
 if (!fs.existsSync(claudeMd)) {
-  fs.writeFileSync(claudeMd, '# E2E Test Group\nThis is a test group for BoxLite e2e testing.\n');
+  fs.writeFileSync(
+    claudeMd,
+    '# E2E Test Group\nThis is a test group for BoxLite e2e testing.\n',
+  );
 }
 
 const testGroup: RegisteredGroup = {
@@ -48,7 +51,10 @@ const testInput = {
 };
 
 console.log('=== AgentLite BoxLite E2E Test ===\n');
-console.log('Image:', process.env.BOX_IMAGE || 'ghcr.io/boxlite-ai/agentlite-agent:latest');
+console.log(
+  'Image:',
+  process.env.BOX_IMAGE || 'ghcr.io/boxlite-ai/agentlite-agent:latest',
+);
 console.log('Prompt:', testInput.prompt);
 console.log('');
 
@@ -64,7 +70,9 @@ try {
     },
     async (output: ContainerOutput) => {
       streamedOutputs.push(output);
-      console.log(`[stream] status=${output.status} result=${output.result?.slice(0, 200) || '(null)'}`);
+      console.log(
+        `[stream] status=${output.status} result=${output.result?.slice(0, 200) || '(null)'}`,
+      );
     },
   );
 
@@ -88,7 +96,9 @@ try {
 
   const hasResult = streamedOutputs.some((o) => o.result);
   if (!hasResult) {
-    console.warn('WARN: No result text in streamed outputs (agent may have responded with tool use only)');
+    console.warn(
+      'WARN: No result text in streamed outputs (agent may have responded with tool use only)',
+    );
   }
 
   console.log('\nPASS: E2E test completed successfully');

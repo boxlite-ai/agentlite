@@ -20,11 +20,13 @@
 <p align="center">各エージェントはマイクロVM内の独立したコンテナで実行されます。<br>ハイパーバイザーレベルの分離。ミリ秒で起動。複雑なセットアップ不要。</p>
 
 **macOS (Apple Silicon)**
+
 ```bash
 curl -fsSL https://agentlite.dev/install-docker-sandboxes.sh | bash
 ```
 
 **Windows (WSL)**
+
 ```bash
 curl -fsSL https://agentlite.dev/install-docker-sandboxes-windows.sh | bash
 ```
@@ -74,6 +76,7 @@ claude
 **カスタマイズ＝コード変更。** 設定ファイルの肥大化なし。動作を変えたい？コードを変更するだけ。コードベースは変更しても安全な規模です。
 
 **AIネイティブ。**
+
 - インストールウィザードなし — Claude Codeがセットアップを案内。
 - モニタリングダッシュボードなし — Claudeに状況を聞くだけ。
 - デバッグツールなし — 問題を説明すればClaudeが修正。
@@ -104,6 +107,7 @@ claude
 ```
 
 メインチャネル（セルフチャット）から、グループやタスクを管理できます：
+
 ```
 @Andy 全グループのスケジュールタスクを一覧表示して
 @Andy 月曜のブリーフィングタスクを一時停止して
@@ -136,9 +140,11 @@ Telegram対応を追加したい場合、コアコードベースにTelegramを�
 私たちが求めているスキル：
 
 **コミュニケーションチャネル**
+
 - `/add-signal` - Signalをチャネルとして追加
 
 **セッション管理**
+
 - `/clear` - 会話をコンパクト化する`/clear`コマンドの追加（同一セッション内で重要な情報を保持しながらコンテキストを要約）。Claude Agent SDKを通じてプログラム的にコンパクト化をトリガーする方法の解明が必要。
 
 ## 必要条件
@@ -159,6 +165,7 @@ Telegram対応を追加したい場合、コアコードベースにTelegramを�
 詳細なアーキテクチャについては、[docs/SPEC.md](docs/SPEC.md)を参照してください。
 
 主要ファイル：
+
 - `src/orchestrator.ts` - オーケストレーター：状態、メッセージループ、エージェント呼び出し
 - `src/channels/registry.ts` - チャネルレジストリ（起動時の自己登録）
 - `src/ipc.ts` - IPCウォッチャーとタスク処理
@@ -197,6 +204,7 @@ ANTHROPIC_AUTH_TOKEN=your-token-here
 ```
 
 以下が使用可能です：
+
 - [Ollama](https://ollama.ai)とAPIプロキシ経由のローカルモデル
 - [Together AI](https://together.ai)、[Fireworks](https://fireworks.ai)等でホストされたオープンソースモデル
 - Anthropic互換APIのカスタムモデルデプロイメント

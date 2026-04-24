@@ -191,7 +191,11 @@ sock.ev.on('connection.update', async (update) => {
       syncOk = output.includes('SYNCED:');
       logger.info({ output: output.trim() }, 'Sync output');
     } finally {
-      try { fs.unlinkSync(tmpScript); } catch { /* ignore cleanup errors */ }
+      try {
+        fs.unlinkSync(tmpScript);
+      } catch {
+        /* ignore cleanup errors */
+      }
     }
   } catch (err) {
     logger.error({ err }, 'Sync failed');

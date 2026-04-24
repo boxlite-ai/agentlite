@@ -55,6 +55,7 @@ git merge upstream/skill/native-credential-proxy || {
 ```
 
 This merges in:
+
 - `src/credential-proxy.ts` and `src/credential-proxy.test.ts` (the proxy implementation)
 - Restored credential proxy usage in `src/orchestrator.ts`, `src/container-runner.ts`, `src/container-runtime.ts`, `src/config.ts`
 - Removed `@onecli-sh/sdk` dependency
@@ -119,6 +120,7 @@ npm run build
 ```
 
 Then restart the service:
+
 - macOS: `launchctl kickstart -k gui/$(id -u)/com.agentlite`
 - Linux: `systemctl --user restart agentlite`
 - WSL/manual: stop and re-run `bash start-agentlite.sh`

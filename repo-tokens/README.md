@@ -32,8 +32,8 @@ This badge gives some indication of how easy it will be to work with an agent on
 
 Repos using repo-tokens:
 
-| Repo | Badge |
-|------|-------|
+| Repo                                               | Badge                                                                                      |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------ |
 | [AgentLite](https://github.com/qwibitai/AgentLite) | ![tokens](https://raw.githubusercontent.com/qwibitai/AgentLite/main/repo-tokens/badge.svg) |
 
 ### Full workflow example
@@ -88,23 +88,23 @@ The action replaces everything between the markers with the token count.
 
 ## Inputs
 
-| Input | Default | Description |
-|-------|---------|-------------|
-| `include` | *required* | Glob patterns for files to count (space-separated) |
-| `exclude` | `''` | Glob patterns to exclude (space-separated) |
-| `context-window` | `200000` | Context window size for percentage calculation |
-| `readme` | `README.md` | Path to README file |
-| `encoding` | `cl100k_base` | Tiktoken encoding name |
-| `marker` | `token-count` | HTML comment marker name |
-| `badge-path` | `''` | Path to write SVG badge (empty = no SVG) |
+| Input            | Default       | Description                                        |
+| ---------------- | ------------- | -------------------------------------------------- |
+| `include`        | _required_    | Glob patterns for files to count (space-separated) |
+| `exclude`        | `''`          | Glob patterns to exclude (space-separated)         |
+| `context-window` | `200000`      | Context window size for percentage calculation     |
+| `readme`         | `README.md`   | Path to README file                                |
+| `encoding`       | `cl100k_base` | Tiktoken encoding name                             |
+| `marker`         | `token-count` | HTML comment marker name                           |
+| `badge-path`     | `''`          | Path to write SVG badge (empty = no SVG)           |
 
 ## Outputs
 
-| Output | Description |
-|--------|-------------|
-| `tokens` | Total token count (e.g., `34940`) |
-| `percentage` | Percentage of context window (e.g., `17`) |
-| `badge` | The formatted text that was inserted (e.g., `34.9k tokens · 17% of context window`) |
+| Output       | Description                                                                         |
+| ------------ | ----------------------------------------------------------------------------------- |
+| `tokens`     | Total token count (e.g., `34940`)                                                   |
+| `percentage` | Percentage of context window (e.g., `17`)                                           |
+| `badge`      | The formatted text that was inserted (e.g., `34.9k tokens · 17% of context window`) |
 
 ## How it works
 

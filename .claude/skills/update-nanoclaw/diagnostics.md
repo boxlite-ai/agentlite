@@ -35,6 +35,7 @@ Write `/tmp/agentlite-diagnostics.json`. No paths, usernames, hostnames, or IP a
 Show the entire JSON to the user and ask via AskUserQuestion: **Yes** / **No** / **Never ask again**
 
 **Yes**:
+
 ```bash
 curl -s -X POST https://us.i.posthog.com/capture/ -H 'Content-Type: application/json' -d @/tmp/agentlite-diagnostics.json
 rm /tmp/agentlite-diagnostics.json
@@ -43,6 +44,7 @@ rm /tmp/agentlite-diagnostics.json
 **No**: `rm /tmp/agentlite-diagnostics.json`
 
 **Never ask again**:
+
 1. Replace contents of `.claude/skills/setup/diagnostics.md` with `# Diagnostics — opted out`
 2. Replace contents of `.claude/skills/update-agentlite/diagnostics.md` with `# Diagnostics — opted out`
 3. Remove the `## 9. Diagnostics` section from `.claude/skills/setup/SKILL.md` and the `## Diagnostics` section from `.claude/skills/update-agentlite/SKILL.md`

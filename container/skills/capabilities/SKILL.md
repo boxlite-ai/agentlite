@@ -14,6 +14,7 @@ test -d /workspace/project && echo "MAIN" || echo "NOT_MAIN"
 ```
 
 If `NOT_MAIN`, respond with:
+
 > This command is available in your main chat only. Send `/capabilities` there to see what I can do.
 
 Then stop — do not generate the report.
@@ -35,15 +36,17 @@ Each directory is an installed skill. The directory name is the skill name (e.g.
 ### 2. Available tools
 
 Read the allowed tools from your SDK configuration. You always have access to:
+
 - **Core:** Bash, Read, Write, Edit, Glob, Grep
 - **Web:** WebSearch, WebFetch
 - **Orchestration:** Task, TaskOutput, TaskStop, TeamCreate, TeamDelete, SendMessage
 - **Other:** TodoWrite, ToolSearch, Skill, NotebookEdit
-- **MCP:** mcp__agentlite__* (messaging, tasks, group management)
+- **MCP:** mcp**agentlite**\* (messaging, tasks, group management)
 
 ### 3. MCP server tools
 
 The AgentLite MCP server exposes these tools (via `mcp__agentlite__*` prefix):
+
 - `send_message` — send a message to the user/group immediately (optional `sender` for identity labeling)
 - `schedule_task` — schedule a recurring or one-time task (cron / interval / once; group or isolated context)
 - `list_tasks` — list scheduled tasks (main sees all, other groups see their own)
