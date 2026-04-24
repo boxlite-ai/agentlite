@@ -43,7 +43,7 @@ describe('code_run action', () => {
     expect(result.stdout).toBe('hello ts\n');
     expect(result.stderr).toBe('');
     expect(result.exit_code).toBe(0);
-  }, 60_000);
+  });
 
   it('runs Python', async () => {
     const result = await runCode({
