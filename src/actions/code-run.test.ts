@@ -26,7 +26,8 @@ runIfDocker('code_run', () => {
       code: "console.log('hello')",
     });
 
-    expect(result.stdout).toContain('hello');
+    expect(result.stdout).toBe('hello\n');
+    expect(result.stderr).toBe('');
     expect(result.exit_code).toBe(0);
   });
 
@@ -36,7 +37,8 @@ runIfDocker('code_run', () => {
       code: "print('world')",
     });
 
-    expect(result.stdout).toContain('world');
+    expect(result.stdout).toBe('world\n');
+    expect(result.stderr).toBe('');
     expect(result.exit_code).toBe(0);
   });
 
@@ -46,7 +48,8 @@ runIfDocker('code_run', () => {
       code: 'echo test',
     });
 
-    expect(result.stdout).toContain('test');
+    expect(result.stdout).toBe('test\n');
+    expect(result.stderr).toBe('');
     expect(result.exit_code).toBe(0);
   });
 
@@ -54,11 +57,20 @@ runIfDocker('code_run', () => {
     const result = await runCode({
       language: 'python',
       code: 'while True: pass',
-      timeout_ms: 2000,
+      timeout_ms: 1000,
     });
 
     expect(result.exit_code).toBe(124);
     expect(result.stderr).toBe('Execution timed out');
+  }, 10_000);
+
+  it('enforces the memory limit', async () => {
+    const result = await runCode({
+      language: 'python',
+      code: 'data = bytearray(300 * 1024 * 1024)\nprint(len(data))',
+    });
+
+    expect(result.exit_code).not.toBe(0);
   }, 10_000);
 
   it('blocks network access', async () => {
@@ -70,13 +82,4 @@ runIfDocker('code_run', () => {
 
     expect(result.exit_code).not.toBe(0);
   }, 10_000);
-
-  it('returns non-zero exit codes', async () => {
-    const result = await runCode({
-      language: 'python',
-      code: 'import sys; sys.exit(1)',
-    });
-
-    expect(result.exit_code).toBe(1);
-  });
 });

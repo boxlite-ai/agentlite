@@ -1,7 +1,7 @@
 import { Writable } from 'stream';
 
 import Docker from 'dockerode';
-import { transformSync } from 'esbuild';
+import { transform } from 'esbuild';
 import { z } from 'zod';
 
 export const SANDBOX_IMAGES = [
@@ -26,6 +26,7 @@ export interface CodeRunOutput {
 const DEFAULT_TIMEOUT_MS = 30_000;
 export const MAX_TIMEOUT_MS = 30_000;
 const TIMEOUT_EXIT_CODE = 124;
+const MEMORY_BYTES = 256 * 1024 * 1024;
 
 export const codeRunInputSchema = {
   language: z.enum(['javascript', 'typescript', 'python', 'bash']),
@@ -34,26 +35,39 @@ export const codeRunInputSchema = {
 };
 
 const docker = new Docker();
-const imagePromises = new Map<string, Promise<void>>();
+const pullPromises = new Map<string, Promise<void>>();
 
-export async function prePullSandboxImages(): Promise<void> {
-  await Promise.all(SANDBOX_IMAGES.map((image) => ensureImage(image)));
+export function prePullSandboxImages(): Promise<void> {
+  return Promise.all(SANDBOX_IMAGES.map((image) => ensureImage(image))).then(
+    () => undefined,
+  );
+}
+
+export function prePullCodeRunImages(): void {
+  void prePullSandboxImages().catch(() => undefined);
 }
 
 export async function codeRun(input: CodeRunInput): Promise<CodeRunOutput> {
-  const timeoutMs = normalizeTimeout(input.timeout_ms);
-  const image = imageForLanguage(input.language);
-  const cmd = commandForLanguage(input.language, input.code);
+  const parsed = z.object(codeRunInputSchema).parse(input);
+  const timeoutMs = normalizeTimeout(parsed.timeout_ms);
+  const image = imageForLanguage(parsed.language);
+  const cmd = await commandForLanguage(parsed.language, parsed.code);
   const startedAt = Date.now();
+
   await ensureImage(image);
-  const containerOptions: Docker.ContainerCreateOptions = {
+
+  const containerOptions = {
     Image: image,
     Cmd: cmd,
+    AttachStdout: true,
+    AttachStderr: true,
+    Tty: false,
     NetworkDisabled: true,
+    ReadonlyRootfs: true,
     WorkingDir: '/sandbox',
     HostConfig: {
-      Memory: 256 * 1024 * 1024,
-      MemorySwap: 256 * 1024 * 1024,
+      Memory: MEMORY_BYTES,
+      MemorySwap: MEMORY_BYTES,
       PidsLimit: 50,
       Tmpfs: { '/sandbox': 'size=64m,exec' },
       NetworkMode: 'none',
@@ -61,11 +75,9 @@ export async function codeRun(input: CodeRunInput): Promise<CodeRunOutput> {
       AutoRemove: true,
       SecurityOpt: ['no-new-privileges'],
     },
-  };
-  const container: Docker.Container =
-    await docker.createContainer(containerOptions);
+  } as Docker.ContainerCreateOptions & { ReadonlyRootfs: boolean };
+  const container = await docker.createContainer(containerOptions);
 
-  let timedOut = false;
   const output = collectContainerOutput(container);
   const execution = (async (): Promise<CodeRunOutput> => {
     const wait = container.wait({ condition: 'next-exit' });
@@ -80,9 +92,9 @@ export async function codeRun(input: CodeRunInput): Promise<CodeRunOutput> {
     };
   })();
 
+  let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<CodeRunOutput>((resolve) => {
-    setTimeout(() => {
-      timedOut = true;
+    timer = setTimeout(() => {
       void killAndRemove(container);
       resolve({
         stdout: '',
@@ -96,9 +108,8 @@ export async function codeRun(input: CodeRunInput): Promise<CodeRunOutput> {
   try {
     return await Promise.race([execution, timeout]);
   } finally {
-    if (!timedOut) {
-      execution.catch(() => undefined);
-    }
+    if (timer) clearTimeout(timer);
+    execution.catch(() => undefined);
   }
 }
 
@@ -121,17 +132,18 @@ function imageForLanguage(language: CodeRunInput['language']): string {
   }
 }
 
-function commandForLanguage(
+async function commandForLanguage(
   language: CodeRunInput['language'],
   code: string,
-): string[] {
+): Promise<string[]> {
   switch (language) {
     case 'javascript':
       return ['node', '-e', code];
     case 'typescript': {
-      const result = transformSync(code, {
+      const result = await transform(code, {
         loader: 'ts',
         format: 'cjs',
+        platform: 'node',
         target: 'node20',
       });
       return ['node', '-e', result.code];
@@ -190,10 +202,23 @@ async function killAndRemove(container: Docker.Container): Promise<void> {
   }
 }
 
+async function ensureImage(image: string): Promise<void> {
+  const existing = pullPromises.get(image);
+  if (existing) return existing;
+
+  const pullPromise = docker
+    .getImage(image)
+    .inspect()
+    .then(() => undefined)
+    .catch(() => pullImage(image));
+  pullPromises.set(image, pullPromise);
+  return pullPromise;
+}
+
 async function pullImage(image: string): Promise<void> {
   const stream = await docker.pull(image);
   await new Promise<void>((resolve, reject) => {
-    docker.modem.followProgress(stream, (err) => {
+    docker.modem.followProgress(stream, (err: Error | null) => {
       if (err) {
         reject(err);
         return;
@@ -201,18 +226,4 @@ async function pullImage(image: string): Promise<void> {
       resolve();
     });
   });
-}
-
-async function ensureImage(image: string): Promise<void> {
-  if (!imagePromises.has(image)) {
-    imagePromises.set(
-      image,
-      docker
-        .getImage(image)
-        .inspect()
-        .then(() => undefined)
-        .catch(() => pullImage(image)),
-    );
-  }
-  await imagePromises.get(image);
 }

@@ -1,9 +1,5 @@
 import type { RegisteredAction } from '../api/action.js';
-import {
-  codeRun,
-  codeRunInputSchema,
-  prePullSandboxImages,
-} from './code-run.js';
+import { codeRun, codeRunInputSchema } from './code-run.js';
 
 export function registerBuiltinActions(
   actions: Map<string, RegisteredAction>,
@@ -17,13 +13,10 @@ export function registerBuiltinActions(
   });
 }
 
-export function prePullCodeRunImages(): void {
-  void prePullSandboxImages().catch(console.error);
-}
-
 export {
   SANDBOX_IMAGES,
   codeRun,
+  prePullCodeRunImages,
   prePullSandboxImages,
   runCode,
 } from './code-run.js';
