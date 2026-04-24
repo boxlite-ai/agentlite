@@ -34,6 +34,17 @@ describe('code_run action', () => {
     expect(result.exit_code).toBe(0);
   });
 
+  it('runs TypeScript', async () => {
+    const result = await runCode({
+      language: 'typescript',
+      code: "const msg: string = 'hello ts'; console.log(msg)",
+    });
+
+    expect(result.stdout).toBe('hello ts\n');
+    expect(result.stderr).toBe('');
+    expect(result.exit_code).toBe(0);
+  });
+
   it('runs Python', async () => {
     const result = await runCode({
       language: 'python',
@@ -52,17 +63,6 @@ describe('code_run action', () => {
     });
 
     expect(result.stdout).toBe('test\n');
-    expect(result.stderr).toBe('');
-    expect(result.exit_code).toBe(0);
-  });
-
-  it('runs TypeScript', async () => {
-    const result = await runCode({
-      language: 'typescript',
-      code: "const msg: string = 'hello ts'; console.log(msg)",
-    });
-
-    expect(result.stdout).toBe('hello ts\n');
     expect(result.stderr).toBe('');
     expect(result.exit_code).toBe(0);
   });
