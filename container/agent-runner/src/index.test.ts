@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { resolveUsageModel } from './index.js';
 
 describe('resolveUsageModel', () => {
-  it('returns the current model when it is present in modelUsage', () => {
+  it('returns the only model in modelUsage', () => {
     expect(
       resolveUsageModel('claude-opus-4-6', {
         'claude-opus-4-6': {
@@ -16,7 +16,7 @@ describe('resolveUsageModel', () => {
     ).toBe('claude-opus-4-6');
   });
 
-  it('returns null when currentModel is not present in modelUsage', () => {
+  it('does not fall back to currentModel when it is not present in modelUsage', () => {
     expect(
       resolveUsageModel('claude-opus-4-6', {
         'claude-haiku-4-5': {
@@ -32,12 +32,12 @@ describe('resolveUsageModel', () => {
           cacheCreationInputTokens: 0,
         },
       }),
-    ).toBeNull();
+    ).toBe('claude-sonnet-4-6');
   });
 
-  it('falls back to the highest-token model when currentModel is unavailable', () => {
+  it('returns the highest-token model when multiple models are present', () => {
     expect(
-      resolveUsageModel(undefined, {
+      resolveUsageModel('claude-haiku-4-5', {
         'claude-haiku-4-5': {
           inputTokens: 10,
           outputTokens: 10,

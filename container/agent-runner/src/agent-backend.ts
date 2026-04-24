@@ -305,15 +305,9 @@ export function waitForIpcMessage(
 }
 
 export function resolveUsageModel(
-  currentModel: string | undefined,
+  _currentModel: string | undefined,
   modelUsage: SDKResultMessage['modelUsage'],
 ): string | null {
-  if (currentModel) {
-    return Object.prototype.hasOwnProperty.call(modelUsage, currentModel)
-      ? currentModel
-      : null;
-  }
-
   const models = Object.entries(modelUsage);
   if (models.length === 1) {
     return models[0]![0];
