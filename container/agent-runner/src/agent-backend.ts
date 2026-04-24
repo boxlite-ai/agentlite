@@ -308,10 +308,6 @@ export function resolveUsageModel(
   currentModel: string | undefined,
   modelUsage: SDKResultMessage['modelUsage'],
 ): string | null {
-  if (currentModel && Object.hasOwn(modelUsage, currentModel)) {
-    return currentModel;
-  }
-
   const models = Object.entries(modelUsage);
   if (models.length === 1) {
     return models[0]![0];
