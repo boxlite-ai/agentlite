@@ -116,6 +116,7 @@ export const RESERVED_ACTION_TYPES = [
   'register_group',
   'search_actions',
   'call_action',
+  'code_run',
 ] as const;
 
 const RESERVED_SET: ReadonlySet<string> = new Set(RESERVED_ACTION_TYPES);

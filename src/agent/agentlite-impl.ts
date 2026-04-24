@@ -31,6 +31,7 @@ import type {
 } from '../api/options.js';
 import type { Agent } from '../api/agent.js';
 import type { AgentLite } from '../api/sdk.js';
+import { prePullCodeRunImages } from '../actions/index.js';
 
 interface RuntimeOptionsAwareAgent extends Agent {
   mergeRuntimeOptions(options?: AgentOptions): void;
@@ -105,6 +106,9 @@ class AgentLiteImpl implements AgentLite {
       path.join(this._runtimeConfig.workdir, '.boxlite'),
     );
     boxRuntime.ensureRuntimeReady();
+    if (!process.env.VITEST && !process.env.VITEST_WORKER_ID) {
+      prePullCodeRunImages();
+    }
     this._agentModule = await import('./agent-impl.js');
     this._registry = initAgentRegistryDb(this._runtimeConfig.workdir);
     this.restorePersistedAgents();
