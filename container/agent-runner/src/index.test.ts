@@ -35,7 +35,7 @@ describe('resolveUsageModel', () => {
     ).toBe('claude-sonnet-4-6');
   });
 
-  it('returns the highest-token model when multiple models are present', () => {
+  it('returns currentModel when it is present in modelUsage', () => {
     expect(
       resolveUsageModel('claude-haiku-4-5', {
         'claude-haiku-4-5': {
@@ -51,7 +51,7 @@ describe('resolveUsageModel', () => {
           cacheCreationInputTokens: 0,
         },
       }),
-    ).toBe('claude-sonnet-4-6');
+    ).toBe('claude-haiku-4-5');
   });
 
   it('returns null when no usage model is available', () => {

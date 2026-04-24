@@ -267,7 +267,7 @@ describe('usage_get_summary action', () => {
     expect(opus?.cost_usd).toBeCloseTo(0.01575);
   });
 
-  it('scopes results to sourceGroup for non-main callers', async () => {
+  it('non-main caller sees only its own group data', async () => {
     agent.db.recordTokenUsage({
       group_jid: 'test-group',
       session_id: 'session-local',
