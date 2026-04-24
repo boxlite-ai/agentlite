@@ -56,19 +56,16 @@ describe('code_run action', () => {
     expect(result.exit_code).toBe(0);
   });
 
-  it.skipIf(process.env.CI === 'true' || process.platform === 'darwin')(
-    'runs TypeScript',
-    async () => {
-      const result = await runCode({
-        language: 'typescript',
-        code: "const msg: string = 'hello ts'; console.log(msg)",
-      });
+  it('runs TypeScript', async () => {
+    const result = await runCode({
+      language: 'typescript',
+      code: "const msg: string = 'hello ts'; console.log(msg)",
+    });
 
-      expect(result.stdout).toBe('hello ts\n');
-      expect(result.stderr).toBe('');
-      expect(result.exit_code).toBe(0);
-    },
-  );
+    expect(result.stdout).toBe('hello ts\n');
+    expect(result.stderr).toBe('');
+    expect(result.exit_code).toBe(0);
+  });
 
   it('times out long-running code', async () => {
     const result = await runCode({
