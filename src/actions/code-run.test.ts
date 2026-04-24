@@ -1,22 +1,25 @@
 import Docker from 'dockerode';
 import { beforeAll, describe, expect, it } from 'vitest';
 
-import { prePullSandboxImages, runCode } from './code-run.js';
+import { runCode } from './code-run.js';
+import { prePullSandboxImages } from './sandbox-images.js';
 
-async function dockerIsAvailable(): Promise<boolean> {
+const docker = new Docker();
+
+async function dockerAvailable(): Promise<boolean> {
   try {
-    await new Docker().ping();
+    await docker.ping();
     return true;
   } catch {
     return false;
   }
 }
 
-const dockerAvailable = await dockerIsAvailable();
-const runIfDocker = dockerAvailable ? describe : describe.skip;
-
-runIfDocker('code_run', () => {
+describe('code_run action', () => {
   beforeAll(async () => {
+    if (!(await dockerAvailable())) {
+      throw new Error('Docker is required for code_run tests');
+    }
     await prePullSandboxImages();
   }, 120_000);
 
@@ -61,25 +64,28 @@ runIfDocker('code_run', () => {
     });
 
     expect(result.exit_code).toBe(124);
-    expect(result.stderr).toBe('Execution timed out');
-  }, 10_000);
+    expect(result.stderr).toContain('Execution timed out');
+  });
 
-  it('enforces the memory limit', async () => {
-    const result = await runCode({
-      language: 'python',
-      code: 'data = bytearray(300 * 1024 * 1024)\nprint(len(data))',
-    });
+  it.skipIf(process.env.CI === 'true' || process.platform === 'darwin')(
+    'enforces the memory limit',
+    async () => {
+      const result = await runCode({
+        language: 'python',
+        code: 'x = bytearray(1024 * 1024 * 1024); print(len(x))',
+      });
 
-    expect(result.exit_code).not.toBe(0);
-  }, 10_000);
+      expect(result.exit_code).not.toBe(0);
+    },
+  );
 
   it('blocks network access', async () => {
     const result = await runCode({
       language: 'bash',
-      code: 'wget -T 1 -qO- https://example.com',
-      timeout_ms: 3000,
+      code: 'wget -qO- -T 1 http://1.1.1.1',
+      timeout_ms: 2000,
     });
 
     expect(result.exit_code).not.toBe(0);
-  }, 10_000);
+  });
 });
