@@ -174,7 +174,6 @@ function killOrphanedProcesses(projectRoot: string): void {
   }
 }
 
-
 function setupSystemd(
   projectRoot: string,
   nodePath: string,

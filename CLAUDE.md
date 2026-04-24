@@ -8,26 +8,26 @@ Single Node.js process. Two-level API: `createAgentLite()` returns a platform in
 
 ## Key Files
 
-| File | Purpose |
-|------|---------|
-| `src/api/sdk.ts` | Public API: `createAgentLite()`, `AgentLite` interface |
-| `src/api/agent.ts` | Public API: `Agent` interface |
-| `src/api/channel-driver.ts` | Public API: `ChannelDriver` interface |
-| `src/api/options.ts` | Public API: `AgentLiteOptions`, `AgentOptions` |
-| `src/api/channels/telegram.ts` | Public API: `telegram()` factory |
-| `src/agentlite-impl.ts` | AgentLite implementation (not exported) |
-| `src/agent-impl.ts` | Agent implementation: channels, message loop, groups |
-| `src/agent-config.ts` | Immutable per-agent config (paths, identity, credentials) |
-| `src/runtime-config.ts` | Immutable shared runtime config (box, timeouts) |
-| `src/cli.ts` | CLI entry point (bin): process handlers, channel auto-discovery |
-| `src/box-runtime.ts` | BoxLite VM runtime management |
-| `src/container-runner.ts` | Spawns agent VMs with volume mounts |
-| `src/ipc.ts` | IPC watcher and task processing |
-| `src/router.ts` | Message formatting and outbound routing |
-| `src/task-scheduler.ts` | Runs scheduled tasks |
-| `src/db.ts` | SQLite operations |
-| `groups/{name}/CLAUDE.md` | Per-group memory (isolated) |
-| `container/skills/` | Skills loaded inside agent VMs (browser, status, formatting) |
+| File                           | Purpose                                                         |
+| ------------------------------ | --------------------------------------------------------------- |
+| `src/api/sdk.ts`               | Public API: `createAgentLite()`, `AgentLite` interface          |
+| `src/api/agent.ts`             | Public API: `Agent` interface                                   |
+| `src/api/channel-driver.ts`    | Public API: `ChannelDriver` interface                           |
+| `src/api/options.ts`           | Public API: `AgentLiteOptions`, `AgentOptions`                  |
+| `src/api/channels/telegram.ts` | Public API: `telegram()` factory                                |
+| `src/agentlite-impl.ts`        | AgentLite implementation (not exported)                         |
+| `src/agent-impl.ts`            | Agent implementation: channels, message loop, groups            |
+| `src/agent-config.ts`          | Immutable per-agent config (paths, identity, credentials)       |
+| `src/runtime-config.ts`        | Immutable shared runtime config (box, timeouts)                 |
+| `src/cli.ts`                   | CLI entry point (bin): process handlers, channel auto-discovery |
+| `src/box-runtime.ts`           | BoxLite VM runtime management                                   |
+| `src/container-runner.ts`      | Spawns agent VMs with volume mounts                             |
+| `src/ipc.ts`                   | IPC watcher and task processing                                 |
+| `src/router.ts`                | Message formatting and outbound routing                         |
+| `src/task-scheduler.ts`        | Runs scheduled tasks                                            |
+| `src/db.ts`                    | SQLite operations                                               |
+| `groups/{name}/CLAUDE.md`      | Per-group memory (isolated)                                     |
+| `container/skills/`            | Skills loaded inside agent VMs (browser, status, formatting)    |
 
 ## Secrets / Credentials / Proxy (OneCLI)
 
@@ -42,14 +42,14 @@ Four types of skills exist in AgentLite. See [CONTRIBUTING.md](CONTRIBUTING.md) 
 - **Operational skills** — instruction-only workflows, always on `main` (e.g. `/setup`, `/debug`)
 - **Container skills** — loaded inside agent containers at runtime (`container/skills/`)
 
-| Skill | When to Use |
-|-------|-------------|
-| `/setup` | First-time installation, authentication, service configuration |
-| `/customize` | Adding channels, integrations, changing behavior |
-| `/debug` | Container issues, logs, troubleshooting |
-| `/update-agentlite` | Bring upstream AgentLite updates into a customized install |
-| `/qodo-pr-resolver` | Fetch and fix Qodo PR review issues interactively or in batch |
-| `/get-qodo-rules` | Load org- and repo-level coding rules from Qodo before code tasks |
+| Skill               | When to Use                                                       |
+| ------------------- | ----------------------------------------------------------------- |
+| `/setup`            | First-time installation, authentication, service configuration    |
+| `/customize`        | Adding channels, integrations, changing behavior                  |
+| `/debug`            | Container issues, logs, troubleshooting                           |
+| `/update-agentlite` | Bring upstream AgentLite updates into a customized install        |
+| `/qodo-pr-resolver` | Fetch and fix Qodo PR review issues interactively or in batch     |
+| `/get-qodo-rules`   | Load org- and repo-level coding rules from Qodo before code tasks |
 
 ## Contributing
 
@@ -66,6 +66,7 @@ npm run build        # Compile TypeScript
 ```
 
 Service management:
+
 ```bash
 # macOS (launchd)
 launchctl load ~/Library/LaunchAgents/com.agentlite.plist

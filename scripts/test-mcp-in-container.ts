@@ -154,15 +154,13 @@ async function main() {
           "console.log('MCP_IMPORT_OK:' + typeof McpServer);",
         ].join('\n'),
       },
-      [
-        '#!/bin/bash',
-        'set -e',
-        'node /app/src/mcp/test/server.mjs',
-      ].join('\n'),
+      ['#!/bin/bash', 'set -e', 'node /app/src/mcp/test/server.mjs'].join('\n'),
     );
 
     if (stdout.includes('MCP_IMPORT_OK:function')) {
-      pass('JS MCP server resolves @modelcontextprotocol/sdk via /app/node_modules (no symlink)');
+      pass(
+        'JS MCP server resolves @modelcontextprotocol/sdk via /app/node_modules (no symlink)',
+      );
     } else {
       fail(
         'JS MCP server',
@@ -193,7 +191,9 @@ async function main() {
     );
 
     if (stdout.includes('TS_MCP_OK:function:hello')) {
-      pass('TS MCP server runs with --experimental-transform-types at /app/src/mcp/');
+      pass(
+        'TS MCP server runs with --experimental-transform-types at /app/src/mcp/',
+      );
     } else {
       fail(
         'TS MCP server',
@@ -223,7 +223,10 @@ async function main() {
       ].join('\n'),
     );
 
-    if (stdout.includes('IMPORT_FAILED') && !stdout.includes('SHOULD_NOT_REACH')) {
+    if (
+      stdout.includes('IMPORT_FAILED') &&
+      !stdout.includes('SHOULD_NOT_REACH')
+    ) {
       pass('Control: outside /app/ tree, import correctly fails');
     } else {
       fail('Control test', `stdout=${stdout.trim()}`);

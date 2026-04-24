@@ -4,12 +4,102 @@ import path from 'path';
 
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
+import { computeCostUsd } from './token-pricing.js';
 import {
   NewMessage,
   RegisteredGroup,
   ScheduledTask,
   TaskRunLog,
 } from './types.js';
+
+export interface TokenUsageRecordInput {
+  group_jid: string;
+  session_id?: string | null;
+  model: string;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens?: number;
+  cache_read_tokens?: number;
+  cache_write_tokens?: number;
+  cost_usd?: number | null;
+  latency_ms?: number | null;
+  ts: number;
+}
+
+export interface TokenUsageRow {
+  id: number;
+  group_jid: string;
+  session_id: string | null;
+  model: string;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  cost_usd: number | null;
+  latency_ms: number | null;
+  ts: number;
+}
+
+export interface TokenUsageSummaryFilters {
+  group_jid?: string;
+  model?: string;
+  since?: number;
+}
+
+export interface TokenUsageSummaryByModel {
+  model: string;
+  request_count: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  cost_usd: number | null;
+}
+
+export interface TokenUsageSummaryBySession {
+  session_id: string | null;
+  request_count: number;
+  total_tokens: number;
+  cost_usd: number | null;
+}
+
+export interface TokenUsageSummary {
+  total_tokens: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  total_cost_usd: number | null;
+  request_count: number;
+  by_model: TokenUsageSummaryByModel[];
+  by_session: TokenUsageSummaryBySession[];
+}
+
+function buildTokenUsageWhere(filters: TokenUsageSummaryFilters): {
+  whereClause: string;
+  params: unknown[];
+} {
+  const clauses: string[] = [];
+  const params: unknown[] = [];
+
+  if (filters.group_jid) {
+    clauses.push('group_jid = ?');
+    params.push(filters.group_jid);
+  }
+  if (filters.model) {
+    clauses.push('model = ?');
+    params.push(filters.model);
+  }
+  if (filters.since !== undefined) {
+    clauses.push('ts > ?');
+    params.push(filters.since);
+  }
+
+  return {
+    whereClause: clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '',
+    params,
+  };
+}
 
 export function createSchema(
   database: Database.Database,
@@ -82,6 +172,20 @@ export function createSchema(
       container_config TEXT,
       requires_trigger INTEGER DEFAULT 1
     );
+    CREATE TABLE IF NOT EXISTS token_usage (
+      id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+      group_jid          TEXT    NOT NULL,
+      session_id         TEXT,
+      model              TEXT    NOT NULL,
+      prompt_tokens      INTEGER NOT NULL DEFAULT 0,
+      completion_tokens  INTEGER NOT NULL DEFAULT 0,
+      total_tokens       INTEGER NOT NULL DEFAULT 0,
+      cache_read_tokens  INTEGER NOT NULL DEFAULT 0,
+      cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+      cost_usd           REAL,
+      latency_ms         INTEGER,
+      ts                 INTEGER NOT NULL
+    );
 
   `);
 
@@ -142,6 +246,12 @@ export function createSchema(
   } catch {
     /* columns already exist */
   }
+
+  database.exec(`
+    CREATE INDEX IF NOT EXISTS idx_token_usage_group_jid ON token_usage(group_jid);
+    CREATE INDEX IF NOT EXISTS idx_token_usage_ts ON token_usage(ts);
+    CREATE INDEX IF NOT EXISTS idx_token_usage_model ON token_usage(model);
+  `);
 }
 
 export function initDatabase(opts: {
@@ -564,6 +674,142 @@ export class AgentDb {
       result[row.group_folder] = row.session_id;
     }
     return result;
+  }
+
+  // --- Token usage ---
+
+  recordTokenUsage(usage: TokenUsageRecordInput): void {
+    const promptTokens = usage.prompt_tokens;
+    const completionTokens = usage.completion_tokens;
+    const cacheReadTokens = usage.cache_read_tokens ?? 0;
+    const cacheWriteTokens = usage.cache_write_tokens ?? 0;
+    const totalTokens = usage.total_tokens ?? promptTokens + completionTokens;
+    const costUsd =
+      usage.cost_usd ??
+      computeCostUsd({
+        model: usage.model,
+        promptTokens,
+        completionTokens,
+        cacheReadTokens,
+        cacheWriteTokens,
+      }) ??
+      null;
+
+    this.db
+      .prepare(
+        `
+    INSERT INTO token_usage (
+      group_jid,
+      session_id,
+      model,
+      prompt_tokens,
+      completion_tokens,
+      total_tokens,
+      cache_read_tokens,
+      cache_write_tokens,
+      cost_usd,
+      latency_ms,
+      ts
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `,
+      )
+      .run(
+        usage.group_jid,
+        usage.session_id ?? null,
+        usage.model,
+        promptTokens,
+        completionTokens,
+        totalTokens,
+        cacheReadTokens,
+        cacheWriteTokens,
+        costUsd,
+        usage.latency_ms ?? null,
+        usage.ts,
+      );
+  }
+
+  getTokenUsageSummary(
+    filters: TokenUsageSummaryFilters = {},
+  ): TokenUsageSummary {
+    const { whereClause, params } = buildTokenUsageWhere(filters);
+
+    const totals = this.db
+      .prepare(
+        `
+    SELECT
+      COALESCE(SUM(total_tokens), 0) AS total_tokens,
+      COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+      COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+      COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
+      COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
+      SUM(cost_usd) AS total_cost_usd,
+      COUNT(*) AS request_count
+    FROM token_usage
+    ${whereClause}
+  `,
+      )
+      .get(...params) as {
+      total_tokens: number;
+      prompt_tokens: number;
+      completion_tokens: number;
+      cache_read_tokens: number;
+      cache_write_tokens: number;
+      total_cost_usd: number | null;
+      request_count: number;
+    };
+
+    const byModel = this.db
+      .prepare(
+        `
+    SELECT
+      model,
+      COUNT(*) AS request_count,
+      COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+      COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+      COALESCE(SUM(total_tokens), 0) AS total_tokens,
+      SUM(cost_usd) AS cost_usd
+    FROM token_usage
+    ${whereClause}
+    GROUP BY model
+    ORDER BY request_count DESC, total_tokens DESC, model ASC
+  `,
+      )
+      .all(...params) as TokenUsageSummaryByModel[];
+
+    const bySession = this.db
+      .prepare(
+        `
+    SELECT
+      session_id,
+      COUNT(*) AS request_count,
+      COALESCE(SUM(total_tokens), 0) AS total_tokens,
+      SUM(cost_usd) AS cost_usd
+    FROM token_usage
+    ${whereClause}
+    GROUP BY session_id
+    ORDER BY request_count DESC, total_tokens DESC, session_id ASC
+  `,
+      )
+      .all(...params) as TokenUsageSummaryBySession[];
+
+    return {
+      total_tokens: totals.total_tokens,
+      prompt_tokens: totals.prompt_tokens,
+      completion_tokens: totals.completion_tokens,
+      cache_read_tokens: totals.cache_read_tokens,
+      cache_write_tokens: totals.cache_write_tokens,
+      total_cost_usd: totals.total_cost_usd,
+      request_count: totals.request_count,
+      by_model: byModel,
+      by_session: bySession,
+    };
+  }
+
+  /** @internal - for tests only. */
+  _getTokenUsageRowsForTests(): TokenUsageRow[] {
+    return this.db
+      .prepare('SELECT * FROM token_usage ORDER BY id')
+      .all() as TokenUsageRow[];
   }
 
   // --- Registered groups ---

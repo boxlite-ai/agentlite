@@ -527,3 +527,38 @@ describe('registered group isMain', () => {
     expect(group.isMain).toBeUndefined();
   });
 });
+
+// --- Token usage ---
+
+describe('recordTokenUsage', () => {
+  it('stores a token usage row with all expected columns', () => {
+    db.recordTokenUsage({
+      group_jid: 'group@g.us',
+      session_id: 'session-123',
+      model: 'claude-sonnet-4-6',
+      prompt_tokens: 1200,
+      completion_tokens: 300,
+      cache_read_tokens: 50,
+      cache_write_tokens: 25,
+      latency_ms: 987,
+      ts: 1_710_000_000_000,
+    });
+
+    const rows = db._getTokenUsageRowsForTests();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      id: 1,
+      group_jid: 'group@g.us',
+      session_id: 'session-123',
+      model: 'claude-sonnet-4-6',
+      prompt_tokens: 1200,
+      completion_tokens: 300,
+      total_tokens: 1500,
+      cache_read_tokens: 50,
+      cache_write_tokens: 25,
+      latency_ms: 987,
+      ts: 1_710_000_000_000,
+    });
+    expect(rows[0]?.cost_usd).toBeCloseTo(0.00834375);
+  });
+});

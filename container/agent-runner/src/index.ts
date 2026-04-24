@@ -70,10 +70,27 @@ interface ContainerSdkMessageOutput {
   message: unknown;
 }
 
+interface ContainerTokenUsageOutput {
+  type: 'token_usage';
+  usage: {
+    group_jid: string;
+    session_id: string | null;
+    model: string;
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+    cache_read_tokens: number;
+    cache_write_tokens: number;
+    latency_ms: number;
+    ts: number;
+  };
+}
+
 type ContainerOutput =
   | ContainerStateOutput
   | ContainerResultOutput
   | ContainerErrorOutput
+  | ContainerTokenUsageOutput
   | ContainerSdkMessageOutput;
 
 async function readStdin(): Promise<string> {
@@ -100,6 +117,8 @@ function writeOutput(output: ContainerOutput): void {
 function log(message: string): void {
   console.error(`[agent-runner] ${message}`);
 }
+
+export { resolveUsageModel } from './agent-backend.js';
 
 async function main(): Promise<void> {
   let containerInput: ContainerInput;
@@ -231,4 +250,9 @@ async function main(): Promise<void> {
   }
 }
 
-main();
+if (
+  process.argv[1] &&
+  fileURLToPath(import.meta.url) === path.resolve(process.argv[1])
+) {
+  void main();
+}

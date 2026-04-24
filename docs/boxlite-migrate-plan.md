@@ -5,6 +5,7 @@
 AgentLite previously used Docker to run agent containers via `spawn('docker', ['run', ...])`. This document describes the migration to BoxLite (`@boxlite-ai/boxlite`), an embedded VM runtime library.
 
 **Why BoxLite?**
+
 - **Embedded library** (no daemon) vs Docker's client-server model
 - **Hardware-level VM isolation** (KVM on Linux, Hypervisor.framework on macOS) vs container namespaces
 - **No root required** — macOS has built-in Hypervisor.framework; Linux only needs `/dev/kvm` group
@@ -249,26 +250,27 @@ AFTER (BoxLite):                     Same protocol, different transport
 
 ## Summary of Changes
 
-| Component | Before (Docker) | After (BoxLite) |
-|-----------|-----------------|-----------------|
-| Runtime check | `execSync('docker info')` | `JsBoxlite.withDefaultConfig()` |
-| Orphan cleanup | `docker ps` + `docker stop` | `runtime.listInfo()` + `runtime.remove()` |
-| Container create | `spawn('docker', ['run',...])` | `runtime.create(opts, name) -> JsBox` |
-| Image setup | `Dockerfile` + `docker build` | `provision.sh` + `box.exec()` on first run |
-| Input delivery | `container.stdin.write()` | `execution.stdin().writeString()` |
+| Component        | Before (Docker)                      | After (BoxLite)                            |
+| ---------------- | ------------------------------------ | ------------------------------------------ |
+| Runtime check    | `execSync('docker info')`            | `JsBoxlite.withDefaultConfig()`            |
+| Orphan cleanup   | `docker ps` + `docker stop`          | `runtime.listInfo()` + `runtime.remove()`  |
+| Container create | `spawn('docker', ['run',...])`       | `runtime.create(opts, name) -> JsBox`      |
+| Image setup      | `Dockerfile` + `docker build`        | `provision.sh` + `box.exec()` on first run |
+| Input delivery   | `container.stdin.write()`            | `execution.stdin().writeString()`          |
 | Output streaming | `stdout.on('data')` + marker parsing | `stdout.next()` loop + same marker parsing |
-| Stop/kill | `docker stop -t 1` | `box.stop()` |
-| Process tracking | `ChildProcess` in GroupQueue | `boxName: string` in GroupQueue |
-| Env injection | OneCLI mutates docker args | OneCLI -> parse `-e` flags -> box env |
-| Host gateway | `--add-host=host.docker.internal` | Not needed (BoxLite handles networking) |
-| Volume syntax | `-v host:container:ro` | `{ hostPath, guestPath, readOnly }` |
-| User mapping | `--user ${uid}:${gid}` | `user: '${uid}:${gid}'` in box opts |
+| Stop/kill        | `docker stop -t 1`                   | `box.stop()`                               |
+| Process tracking | `ChildProcess` in GroupQueue         | `boxName: string` in GroupQueue            |
+| Env injection    | OneCLI mutates docker args           | OneCLI -> parse `-e` flags -> box env      |
+| Host gateway     | `--add-host=host.docker.internal`    | Not needed (BoxLite handles networking)    |
+| Volume syntax    | `-v host:container:ro`               | `{ hostPath, guestPath, readOnly }`        |
+| User mapping     | `--user ${uid}:${gid}`               | `user: '${uid}:${gid}'` in box opts        |
 
 ---
 
 ## Provisioning (replaces Dockerfile)
 
 On first box creation, `container/provision.sh` runs inside the box to install:
+
 - System packages: chromium, fonts (CJK, emoji), curl, git, X11 libs
 - Node.js globals: `agent-browser`, `@anthropic-ai/claude-code`
 - Directory structure: `/workspace/{group,global,extra,ipc/}`
@@ -291,6 +293,7 @@ The agent-runner communicates via:
 ## Volume Mounts (unchanged logic)
 
 Per-group isolation model:
+
 - **Main group**: Read-only project root (`/workspace/project`), writable group folder
 - **Other groups**: Own folder only + read-only global memory
 - **Per-group sessions**: Isolated `.claude/` in `data/sessions/{group}/`
@@ -306,9 +309,14 @@ OneCLI gateway handles credential injection. Previously mutated Docker CLI args 
 Now: extract env vars from the mutated args array and pass as `JsEnvVar[]` to `runtime.create()`.
 
 ```typescript
-async function extractOnecliEnv(agentIdentifier?: string): Promise<Record<string, string>> {
+async function extractOnecliEnv(
+  agentIdentifier?: string,
+): Promise<Record<string, string>> {
   const tempArgs: string[] = [];
-  await onecli.applyContainerConfig(tempArgs, { addHostMapping: false, agent: agentIdentifier });
+  await onecli.applyContainerConfig(tempArgs, {
+    addHostMapping: false,
+    agent: agentIdentifier,
+  });
   const env: Record<string, string> = {};
   for (let i = 0; i < tempArgs.length; i++) {
     if (tempArgs[i] === '-e' && i + 1 < tempArgs.length) {
@@ -326,6 +334,7 @@ async function extractOnecliEnv(agentIdentifier?: string): Promise<Record<string
 ## Files Changed
 
 ### Deleted
+
 - `container/Dockerfile`
 - `container/build.sh`
 - `src/container-runtime.ts`
@@ -333,19 +342,23 @@ async function extractOnecliEnv(agentIdentifier?: string): Promise<Record<string
 - `docs/docker-sandboxes.md`
 
 ### Created
+
 - `src/box-runtime.ts` -- BoxLite runtime abstraction
 - `src/box-runtime.test.ts` -- tests
 - `container/provision.sh` -- first-run box setup script
 - `docs/boxlite-migrate-plan.md` -- this document
 
 ### Rewritten
+
 - `src/container-runner.ts` -- JsBoxlite/JsBox/JsExecution API
 - `src/group-queue.ts` -- boxName replaces ChildProcess
 
 ### Unchanged
+
 - `container/agent-runner/src/index.ts` -- stdin/stdout protocol preserved
 
 ### Modified
+
 - `src/config.ts` -- BOX_IMAGE, BOX_MEMORY_MIB, BOX_CPUS
 - `src/mount-security.ts` -- .docker -> .boxlite
 - `src/index.ts` -- updated imports

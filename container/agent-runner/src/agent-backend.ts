@@ -6,6 +6,7 @@ import {
   query,
   type HookCallback,
   type PreCompactHookInput,
+  type SDKResultMessage,
 } from '@anthropic-ai/claude-agent-sdk';
 
 export const AGENT_BACKEND_TYPES = ['claudeCode', 'codex'] as const;
@@ -101,10 +102,27 @@ interface RuntimeSdkMessageOutput {
   message: unknown;
 }
 
+interface RuntimeTokenUsageOutput {
+  type: 'token_usage';
+  usage: {
+    group_jid: string;
+    session_id: string | null;
+    model: string;
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+    cache_read_tokens: number;
+    cache_write_tokens: number;
+    latency_ms: number;
+    ts: number;
+  };
+}
+
 export type RuntimeOutput =
   | RuntimeStateOutput
   | RuntimeResultOutput
-  | RuntimeSdkMessageOutput;
+  | RuntimeSdkMessageOutput
+  | RuntimeTokenUsageOutput;
 
 interface SDKUserMessage {
   type: 'user';
@@ -284,6 +302,62 @@ export function waitForIpcMessage(
     };
     poll();
   });
+}
+
+export function resolveUsageModel(
+  currentModel: string | undefined,
+  modelUsage: SDKResultMessage['modelUsage'],
+): string | null {
+  const models = Object.entries(modelUsage);
+  if (models.length === 1) {
+    return models[0]![0];
+  }
+  if (models.length === 0) {
+    return null;
+  }
+
+  return models.slice().sort((a, b) => {
+    const totalA = a[1].inputTokens + a[1].outputTokens;
+    const totalB = b[1].inputTokens + b[1].outputTokens;
+    if (totalA !== totalB) return totalB - totalA;
+    return a[0].localeCompare(b[0]);
+  })[0]![0];
+}
+
+function captureTokenUsageSummary(params: {
+  groupJid: string;
+  sessionId: string | undefined;
+  currentModel: string | undefined;
+  queryStartedAt: number;
+  message: SDKResultMessage;
+}): RuntimeTokenUsageOutput['usage'] | null {
+  const usage = params.message.usage;
+  const promptTokens = usage.input_tokens ?? 0;
+  const completionTokens = usage.output_tokens ?? 0;
+  const cacheReadTokens = usage.cache_read_input_tokens ?? 0;
+  const cacheWriteTokens = usage.cache_creation_input_tokens ?? 0;
+  const ts = Date.now();
+  const model = resolveUsageModel(
+    params.currentModel,
+    params.message.modelUsage,
+  );
+
+  if (!model) {
+    return null;
+  }
+
+  return {
+    group_jid: params.groupJid,
+    session_id: params.sessionId ?? null,
+    model,
+    prompt_tokens: promptTokens,
+    completion_tokens: completionTokens,
+    total_tokens: promptTokens + completionTokens,
+    cache_read_tokens: cacheReadTokens,
+    cache_write_tokens: cacheWriteTokens,
+    latency_ms: ts - params.queryStartedAt,
+    ts,
+  };
 }
 
 function getSessionSummary(
@@ -661,6 +735,7 @@ class ClaudeCodeQueryRunner<
     sdkEnv,
     resumeAt,
   }: QueryRunnerInput<TContainerInput>): Promise<RuntimeQueryResult> {
+    const queryStartedAt = Date.now();
     const stream = new MessageStream();
     stream.push(prompt);
     this.deps.writeOutput({
@@ -695,6 +770,7 @@ class ClaudeCodeQueryRunner<
 
     let newSessionId: string | undefined;
     let lastAssistantUuid: string | undefined;
+    let currentModel: string | undefined;
     let messageCount = 0;
     let resultCount = 0;
     const appendedSystemPrompt = buildClaudeSystemPrompt(containerInput);
@@ -775,6 +851,7 @@ class ClaudeCodeQueryRunner<
       }
       if (message.type === 'system' && message.subtype === 'init') {
         newSessionId = message.session_id;
+        currentModel = message.model;
         this.deps.log(`Session initialized: ${newSessionId}`);
       }
 
@@ -793,6 +870,20 @@ class ClaudeCodeQueryRunner<
       // ── Backward-compat: emit result for host message delivery ─
       if (message.type === 'result') {
         resultCount++;
+        const usageSummary = captureTokenUsageSummary({
+          groupJid: containerInput.chatJid,
+          sessionId: newSessionId ?? sessionId,
+          currentModel,
+          queryStartedAt,
+          message,
+        });
+        if (usageSummary) {
+          this.deps.writeOutput({
+            type: 'token_usage',
+            usage: usageSummary,
+          });
+        }
+
         const textResult =
           'result' in message ? (message as { result?: string }).result : null;
         this.deps.log(

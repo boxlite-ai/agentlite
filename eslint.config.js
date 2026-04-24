@@ -1,7 +1,7 @@
-import globals from 'globals'
-import pluginJs from '@eslint/js'
-import tseslint from 'typescript-eslint'
-import noCatchAll from 'eslint-plugin-no-catch-all'
+import globals from 'globals';
+import pluginJs from '@eslint/js';
+import tseslint from 'typescript-eslint';
+import noCatchAll from 'eslint-plugin-no-catch-all';
 
 export default [
   { ignores: ['node_modules/', 'dist/', 'container/', 'groups/'] },
@@ -29,4 +29,4 @@ export default [
       '@typescript-eslint/no-explicit-any': 'warn',
     },
   },
-]
+];

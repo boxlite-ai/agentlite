@@ -86,10 +86,7 @@ async function main() {
     await runInGuest('ip-route', 'ip route 2>&1 || route -n 2>&1');
     await runInGuest('resolv', 'cat /etc/resolv.conf 2>&1');
     // Install curl (proves outbound works)
-    await runInGuest(
-      'install-curl',
-      'apk add --no-cache curl 2>&1 | tail -3',
-    );
+    await runInGuest('install-curl', 'apk add --no-cache curl 2>&1 | tail -3');
     // Try candidate host addresses
     for (const addr of [
       '192.168.127.254', // gvproxy host-loopback alias
