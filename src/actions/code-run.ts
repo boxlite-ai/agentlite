@@ -78,7 +78,10 @@ async function commandForInput(input: CodeRunInput): Promise<PreparedCommand> {
         env: [`CODE=${input.code}`],
       };
     case 'bash':
-      return wrapCommand('sh -c "$CODE"');
+      return {
+        ...wrapCommand('sh -c "$CODE"'),
+        env: [`CODE=${input.code}`],
+      };
   }
 }
 
@@ -204,9 +207,6 @@ export async function runCode(input: CodeRunInput): Promise<CodeRunOutput> {
   const timeoutMs = timeoutForInput(input.timeout_ms);
   const image = imageByLanguage[input.language];
   const command = await commandForInput(input);
-  if (input.language === 'bash') {
-    command.env.push(`CODE=${input.code}`);
-  }
 
   const container = await (docker.createContainer({
     Image: image,
