@@ -43,6 +43,8 @@ export class MessageProcessor {
   private messageLoopRunning = false;
   private _messageLoopPromise: Promise<void> | null = null;
   private _wakeLoop: (() => void) | null = null;
+  /** jids that currently have an in-flight streaming turn. */
+  private streamingJids = new Set<string>();
 
   constructor(
     private readonly ctx: AgentContext,
@@ -50,6 +52,19 @@ export class MessageProcessor {
     private readonly groupMgr: GroupManager,
     private readonly taskMgr: TaskManager,
   ) {}
+
+  /** Emit run.partial_content.interrupted for all in-flight jids and clear the set. */
+  private drainStreamingJids(reason: string, now: string): void {
+    for (const jid of this.streamingJids) {
+      this.ctx.emit('run.partial_content.interrupted', {
+        agentId: this.ctx.id,
+        jid,
+        reason,
+        timestamp: now,
+      });
+    }
+    this.streamingJids.clear();
+  }
 
   /** Start the message polling loop. Returns promise that resolves when stopped. */
   start(): Promise<void> {
@@ -165,17 +180,22 @@ export class MessageProcessor {
       async (event) => {
         // ── Container lifecycle events ────────────────────────
         if (event.type === 'state') {
+          const stateNow = new Date().toISOString();
           this.ctx.emit('run.state', {
             agentId: this.ctx.id,
             jid: chatJid,
             name: group.name,
             folder: group.folder,
             state: event.state,
-            timestamp: new Date().toISOString(),
+            timestamp: stateNow,
             reason: event.reason,
             exitCode: event.exitCode,
           });
           if (event.state === 'idle') this.ctx.queue.notifyIdle(chatJid);
+          // Drain any in-flight streaming turns on container exit (covers SIGKILL/ungraceful exits)
+          if (event.state === 'stopped' && this.streamingJids.size > 0) {
+            this.drainStreamingJids('container_exit', stateNow);
+          }
           return;
         }
 
@@ -204,6 +224,9 @@ export class MessageProcessor {
 
         if (event.type === 'error') {
           hadError = true;
+          if (this.streamingJids.size > 0) {
+            this.drainStreamingJids('container_error', new Date().toISOString());
+          }
           return;
         }
 
@@ -221,6 +244,44 @@ export class MessageProcessor {
             message: msg,
             timestamp: now,
           });
+
+          // Extract partial content events from stream_event SDK messages
+          if (event.sdkType === 'stream_event') {
+            const streamEvent = msg?.event; // BetaRawMessageStreamEvent — correct field
+            if (streamEvent?.type === 'content_block_delta') {
+              if (streamEvent.delta?.type === 'text_delta') {
+                this.ctx.emit('run.partial_content', {
+                  agentId: this.ctx.id,
+                  jid: chatJid,
+                  delta: streamEvent.delta.text,
+                  ...(streamEvent.index !== undefined && {
+                    contentBlockIndex: streamEvent.index,
+                  }),
+                  timestamp: now,
+                });
+                this.streamingJids.add(chatJid);
+              } else if (streamEvent.delta?.type === 'input_json_delta') {
+                this.ctx.emit('run.partial_tool_call', {
+                  agentId: this.ctx.id,
+                  jid: chatJid,
+                  jsonDelta: streamEvent.delta.partial_json,
+                  ...(streamEvent.index !== undefined && {
+                    contentBlockIndex: streamEvent.index,
+                  }),
+                  timestamp: now,
+                });
+                this.streamingJids.add(chatJid);
+              }
+            }
+            if (streamEvent?.type === 'message_stop') {
+              this.ctx.emit('run.partial_content.done', {
+                agentId: this.ctx.id,
+                jid: chatJid,
+                timestamp: now,
+              });
+              this.streamingJids.delete(chatJid);
+            }
+          }
 
           // Derive curated convenience events from SDK messages
           if (event.sdkType === 'assistant' && msg?.message?.content) {
