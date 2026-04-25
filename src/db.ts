@@ -556,33 +556,37 @@ export class AgentDb {
       .run(key, value);
   }
 
-  setContextUtilization(groupJid: string, utilization: number): void {
-    this.db
-      .prepare(
-        `INSERT INTO router_state (key, value, context_utilization, context_utilization_at)
-         VALUES (?, '', ?, ?)
-         ON CONFLICT(key) DO UPDATE SET
-           context_utilization = excluded.context_utilization,
-           context_utilization_at = excluded.context_utilization_at`,
-      )
-      .run(`context_utilization:${groupJid}`, utilization, Date.now());
+  private contextUtilizationKey(groupJid: string): string {
+    return `context_utilization:${groupJid}`;
+  }
+
+  setContextUtilization(groupJid: string, utilization: number | null): void {
+    const key = this.contextUtilizationKey(groupJid);
+    if (utilization === null) {
+      this.db.prepare(`DELETE FROM router_state WHERE key = ?`).run(key);
+    } else {
+      this.db
+        .prepare(
+          `INSERT INTO router_state (key, value, context_utilization, context_utilization_at)
+           VALUES (?, '', ?, ?)
+           ON CONFLICT(key) DO UPDATE SET
+             context_utilization = excluded.context_utilization,
+             context_utilization_at = excluded.context_utilization_at`,
+        )
+        .run(key, utilization, Date.now());
+    }
   }
 
   getContextUtilization(groupJid: string): number | null {
+    const key = this.contextUtilizationKey(groupJid);
     const row = this.db
-      .prepare('SELECT context_utilization FROM router_state WHERE key = ?')
-      .get(`context_utilization:${groupJid}`) as
-      | { context_utilization: number | null }
-      | undefined;
+      .prepare(`SELECT context_utilization FROM router_state WHERE key = ?`)
+      .get(key) as { context_utilization: number | null } | undefined;
     return row?.context_utilization ?? null;
   }
 
   clearContextUtilization(groupJid: string): void {
-    this.db
-      .prepare(
-        'UPDATE router_state SET context_utilization = NULL, context_utilization_at = NULL WHERE key = ?',
-      )
-      .run(`context_utilization:${groupJid}`);
+    this.setContextUtilization(groupJid, null);
   }
 
   // --- Sessions ---
