@@ -39,9 +39,20 @@ async function main(): Promise<void> {
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutdown signal received');
     await agentlite.stop();
+    process.exit(0);
   };
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
-  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('SIGTERM', () => {
+    void shutdown('SIGTERM').catch((err) => {
+      logger.error({ err }, 'Failed to stop AgentLite after SIGTERM');
+      process.exit(1);
+    });
+  });
+  process.on('SIGINT', () => {
+    void shutdown('SIGINT').catch((err) => {
+      logger.error({ err }, 'Failed to stop AgentLite after SIGINT');
+      process.exit(1);
+    });
+  });
 
   await agent.start();
 }

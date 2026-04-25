@@ -60,9 +60,9 @@ function summarizeToolResult(result: unknown): string | null {
   }
 
   try {
-    return JSON.stringify(result).slice(0, 500);
+    return JSON.stringify(result).slice(0, 200);
   } catch {
-    return String(result).slice(0, 500);
+    return String(result).slice(0, 200);
   }
 }
 
@@ -70,7 +70,6 @@ export class ActionsHttp {
   private server: http.Server | null = null;
   private info: ActionsHttpInfo | null = null;
   private tokens = new Map<string, TokenBinding>();
-  private lastKnownWorkItemId: string | null = null;
   private turnCount = 0;
   private lastWrittenStatus: AgentStatus | null = null;
 
@@ -321,7 +320,6 @@ export class ActionsHttp {
         isMain: binding.isMain,
         log,
       };
-      this.captureWorkItemId(name, actionPayload);
       this.turnCount += 1;
       const callStart = Date.now();
       this.writeStatus(
@@ -397,7 +395,7 @@ export class ActionsHttp {
       lastToolDurationMs: overrides.lastToolDurationMs,
       lastToolResult: overrides.lastToolResult,
       turnCount: this.turnCount,
-      workItemId: this.lastKnownWorkItemId,
+      workItemId: null,
       workItemTitle: previous?.workItemTitle ?? null,
       sessionId: this.statusConfig?.sessionId ?? previous?.sessionId ?? 'unknown-session',
       sessionStartedAt:
@@ -405,24 +403,6 @@ export class ActionsHttp {
         ?? previous?.sessionStartedAt
         ?? new Date().toISOString(),
     };
-  }
-
-  private captureWorkItemId(
-    actionName: string,
-    actionPayload: Record<string, unknown>,
-  ): void {
-    if (
-      actionName !== 'workflow_items_move'
-      && actionName !== 'workflow_tasks_update'
-    ) {
-      return;
-    }
-
-    const itemId = actionPayload.itemId;
-
-    if (typeof itemId === 'string' && itemId.trim().length > 0) {
-      this.lastKnownWorkItemId = itemId;
-    }
   }
 
   private writeIdleStatus(): void {
