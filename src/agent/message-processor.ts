@@ -3,6 +3,7 @@
  */
 
 import type { RegisteredGroup as InternalRegisteredGroup } from '../types.js';
+import Anthropic from '@anthropic-ai/sdk';
 import { logger } from '../logger.js';
 import {
   ContainerEvent,
@@ -19,7 +20,10 @@ import {
 import { isAcpNoticeMessage } from '../acp/notice.js';
 import type { AgentContext } from './agent-context.js';
 import type { ChannelManager } from './channel-manager.js';
-import { ContextCompressor } from './context-compressor.js';
+import {
+  ContextCompressor,
+  type FormattedMessage,
+} from './context-compressor.js';
 import type { GroupManager } from './group-manager.js';
 import type { TaskManager } from './task-manager.js';
 import { buildMcpRuntimeConfig } from './mcp-runtime.js';
@@ -44,7 +48,9 @@ export class MessageProcessor {
   private messageLoopRunning = false;
   private _messageLoopPromise: Promise<void> | null = null;
   private _wakeLoop: (() => void) | null = null;
-  private readonly contextCompressor = new ContextCompressor();
+  private readonly contextCompressor = new ContextCompressor(
+    new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY ?? 'missing' }),
+  );
 
   constructor(
     private readonly ctx: AgentContext,
@@ -540,8 +546,8 @@ export class MessageProcessor {
 
     try {
       const result = await this.contextCompressor.compress(
-        recentMessages.map((message) => ({
-          role: message.sender_name || message.sender,
+        recentMessages.map<FormattedMessage>((message) => ({
+          sender: message.sender_name || message.sender,
           content: message.content,
         })),
       );
@@ -566,7 +572,7 @@ export class MessageProcessor {
         timestamp: compressedAt,
       });
 
-      return `${this.contextCompressor.formatSummaryBlock(result.summary, compressedAt)}\n\n${formatMessages(
+      return `${this.formatSummaryBlock(result.summary, compressedAt)}\n\n${formatMessages(
         keptMessages,
         this.ctx.runtimeConfig.timezone,
       )}`;
@@ -596,5 +602,12 @@ export class MessageProcessor {
 
     const utilization = (rateLimitInfo as Record<string, unknown>).utilization;
     return typeof utilization === 'number' ? utilization : null;
+  }
+
+  private formatSummaryBlock(summary: string, compressedAt: string): string {
+    return `<context_summary type="compressed" compressed_at="${compressedAt}">
+Earlier conversation summary (auto-generated):
+${summary}
+</context_summary>`;
   }
 }

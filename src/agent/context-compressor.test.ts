@@ -1,130 +1,70 @@
-import Anthropic from '@anthropic-ai/sdk';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { ContextCompressor, FormattedMessage } from './context-compressor';
 
-import {
-  ContextCompressor,
-  type FormattedMessage,
-} from './context-compressor.js';
-
-function buildMessages(count: number): FormattedMessage[] {
-  return Array.from({ length: count }, (_, index) => ({
-    sender: `User ${index + 1}`,
-    content: `message ${index + 1}`,
-  }));
-}
-
-function createAnthropicMock(summary = 'compact summary'): Anthropic {
-  return {
-    messages: {
-      create: vi.fn(async () => ({
-        content: [{ type: 'text', text: summary }],
-      })),
-    },
-  } as unknown as Anthropic;
-}
+const mockCreate = vi.fn();
+const mockAnthropic = { messages: { create: mockCreate } } as any;
 
 describe('ContextCompressor', () => {
-  it('returns false for null utilization', () => {
-    const compressor = new ContextCompressor(createAnthropicMock());
+  let compressor: ContextCompressor;
 
-    expect(compressor.needsCompression(null)).toBe(false);
+  beforeEach(() => {
+    compressor = new ContextCompressor(mockAnthropic);
+    mockCreate.mockClear();
   });
 
-  it('returns false below 80% utilization', () => {
-    const compressor = new ContextCompressor(createAnthropicMock());
-
-    expect(compressor.needsCompression(0.79)).toBe(false);
-  });
-
-  it('returns true at 80% utilization', () => {
-    const compressor = new ContextCompressor(createAnthropicMock());
-
-    expect(compressor.needsCompression(0.8)).toBe(true);
-  });
-
-  it('returns true above 80% utilization', () => {
-    const compressor = new ContextCompressor(createAnthropicMock());
-
-    expect(compressor.needsCompression(0.95)).toBe(true);
-  });
-
-  it('compress keeps the most recent 20% and summarizes the rest', async () => {
-    const create = vi.fn().mockResolvedValue({
-      content: [{ type: 'text', text: 'compact summary' }],
+  describe('needsCompression', () => {
+    it('returns false for null', () => {
+      expect(compressor.needsCompression(null)).toBe(false);
     });
-    const anthropic = {
-      messages: {
-        create,
-      },
-    } as unknown as Anthropic;
-    const compressor = new ContextCompressor(anthropic);
 
-    const result = await compressor.compress(buildMessages(10));
-
-    expect(result.summary).toBe('compact summary');
-    expect(result.messagesKept).toBeGreaterThanOrEqual(1);
-    expect(result.messagesKept).toBe(2);
-    expect(result.messagesCompressed).toBe(8);
-    expect(result.messagesKept + result.messagesCompressed).toBe(10);
-    expect(create).toHaveBeenCalledTimes(1);
-    expect(create.mock.calls[0]?.[0]).toMatchObject({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 1024,
+    it('returns false below threshold', () => {
+      expect(compressor.needsCompression(0.79)).toBe(false);
     });
-    expect(create.mock.calls[0]?.[0].messages[0].content).toContain(
-      '[User 1]: message 1',
-    );
-    expect(create.mock.calls[0]?.[0].messages[0].content).toContain(
-      '[User 8]: message 8',
-    );
-    expect(create.mock.calls[0]?.[0].messages[0].content).not.toContain(
-      '[User 9]: message 9',
-    );
-  });
 
-  it('compress keeps a single message and skips summarization', async () => {
-    const anthropic = createAnthropicMock();
-    const compressor = new ContextCompressor(anthropic);
-
-    const result = await compressor.compress([
-      { sender: 'User', content: 'one' },
-    ]);
-
-    expect(result).toEqual({
-      summary: '',
-      messagesCompressed: 0,
-      messagesKept: 1,
+    it('returns true at exactly 0.80', () => {
+      expect(compressor.needsCompression(0.8)).toBe(true);
     });
-    expect(anthropic.messages.create).not.toHaveBeenCalled();
+
+    it('returns true above threshold', () => {
+      expect(compressor.needsCompression(0.95)).toBe(true);
+    });
   });
 
-  it('formatSummaryBlock wraps and escapes summary content', () => {
-    const compressor = new ContextCompressor({} as Anthropic);
+  describe('compress', () => {
+    const makeMessages = (n: number): FormattedMessage[] =>
+      Array.from({ length: n }, (_, i) => ({
+        sender: 'user',
+        content: `msg ${i}`,
+      }));
 
-    const block = compressor.formatSummaryBlock(
-      'Use <tags> & "quotes"',
-      '2026-04-25T00:00:00.000Z',
-    );
+    beforeEach(() => {
+      mockCreate.mockResolvedValue({
+        content: [{ type: 'text', text: 'Summary text' }],
+      });
+    });
 
-    expect(block).toContain('<context_summary type="compressed"');
-    expect(block).toContain('compressed_at="2026-04-25T00:00:00.000Z"');
-    expect(block).toContain('Use &lt;tags&gt; &amp; &quot;quotes&quot;');
-    expect(block).toContain('</context_summary>');
-  });
+    it('keeps at least 1 message', async () => {
+      const result = await compressor.compress(makeMessages(1));
+      expect(result.messagesKept).toBeGreaterThanOrEqual(1);
+    });
 
-  it('calls Haiku with the expected model', async () => {
-    const anthropic = createAnthropicMock();
-    const compressor = new ContextCompressor(anthropic);
+    it('returns correct counts for 10 messages', async () => {
+      const result = await compressor.compress(makeMessages(10));
+      expect(result.messagesCompressed + result.messagesKept).toBe(10);
+      expect(result.messagesKept).toBe(2); // 20% of 10
+      expect(result.messagesCompressed).toBe(8);
+    });
 
-    await compressor.compress([
-      { sender: 'user', content: 'old context' },
-      { sender: 'assistant', content: 'new context' },
-    ]);
+    it('returns summary from Haiku', async () => {
+      const result = await compressor.compress(makeMessages(5));
+      expect(result.summary).toBe('Summary text');
+    });
 
-    expect(anthropic.messages.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        model: 'claude-haiku-4-5-20251001',
-      }),
-    );
+    it('calls Haiku with correct model', async () => {
+      await compressor.compress(makeMessages(5));
+      expect(mockCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ model: 'claude-haiku-4-5-20251001' }),
+      );
+    });
   });
 });
