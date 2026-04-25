@@ -418,7 +418,23 @@ export function startSchedulerLoop(deps: SchedulerDependencies): {
       logger.error({ err }, 'Error in scheduler loop');
     }
 
-    if (!stopped) setTimeout(loop, deps.schedulerPollInterval);
+    if (!stopped) {
+      deps.emit?.('run.status', {
+        agentId: deps.agentId,
+        jid: '',
+        status: 'waiting',
+        timestamp: new Date().toISOString(),
+      });
+      setTimeout(() => {
+        deps.emit?.('run.status', {
+          agentId: deps.agentId,
+          jid: '',
+          status: 'idle',
+          timestamp: new Date().toISOString(),
+        });
+        loop();
+      }, deps.schedulerPollInterval);
+    }
   };
 
   loop();
