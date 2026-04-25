@@ -541,7 +541,7 @@ export class MessageProcessor {
     try {
       const result = await this.contextCompressor.compress(
         recentMessages.map((message) => ({
-          sender: message.sender_name || message.sender,
+          role: message.sender_name || message.sender,
           content: message.content,
         })),
       );
@@ -555,8 +555,8 @@ export class MessageProcessor {
       const compressedAt = new Date().toISOString();
 
       delete this.ctx.sessions[group.folder];
-      this.ctx.db.setSession(group.folder, '');
-      this.ctx.db.setContextUtilization(chatJid, null);
+      this.ctx.db.clearSession(group.folder);
+      this.ctx.db.clearContextUtilization(chatJid);
       this.ctx.emit('context_compressed', {
         agentId: this.ctx.id,
         jid: chatJid,
@@ -566,7 +566,7 @@ export class MessageProcessor {
         timestamp: compressedAt,
       });
 
-      return `${this.contextCompressor.formatSummaryBlock(result.summary, compressedAt)}\n${formatMessages(
+      return `${this.contextCompressor.formatSummaryBlock(result.summary, compressedAt)}\n\n${formatMessages(
         keptMessages,
         this.ctx.runtimeConfig.timezone,
       )}`;

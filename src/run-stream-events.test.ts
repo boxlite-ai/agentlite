@@ -44,6 +44,10 @@ vi.mock('./agent/context-compressor.js', () => ({
     compress(messages: Array<{ sender: string; content: string }>) {
       return contextCompressionMocks.compress(messages);
     }
+
+    formatSummaryBlock(summary: string, compressedAt: string) {
+      return `<context_summary type="compressed" compressed_at="${compressedAt}">\nEarlier conversation summary (auto-generated):\n${summary}\n</context_summary>`;
+    }
   },
 }));
 

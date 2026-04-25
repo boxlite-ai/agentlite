@@ -575,7 +575,7 @@ export class AgentDb {
       .run(
         this.contextUtilizationKey(groupJid),
         utilization,
-        utilization === null ? null : Date.now(),
+        utilization !== null ? Date.now() : null,
       );
   }
 
@@ -586,6 +586,10 @@ export class AgentDb {
       | { context_utilization: number | null }
       | undefined;
     return row?.context_utilization ?? null;
+  }
+
+  clearContextUtilization(groupJid: string): void {
+    this.setContextUtilization(groupJid, null);
   }
 
   // --- Sessions ---
@@ -603,6 +607,12 @@ export class AgentDb {
         'INSERT OR REPLACE INTO sessions (group_folder, session_id) VALUES (?, ?)',
       )
       .run(groupFolder, sessionId);
+  }
+
+  clearSession(groupFolder: string): void {
+    this.db
+      .prepare('DELETE FROM sessions WHERE group_folder = ?')
+      .run(groupFolder);
   }
 
   getAllSessions(): Record<string, string> {

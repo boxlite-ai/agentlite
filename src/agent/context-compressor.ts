@@ -7,10 +7,13 @@ export interface CompressResult {
   messagesKept: number;
 }
 
-export interface FormattedMessage {
-  sender: string;
+export interface CompressMessage {
+  role?: string;
+  sender?: string;
   content: string;
 }
+
+export type FormattedMessage = CompressMessage;
 
 function isTextBlock(block: { type: string }): block is TextBlock {
   return block.type === 'text' && 'text' in block;
@@ -35,7 +38,7 @@ export class ContextCompressor {
     return utilization !== null && utilization >= ContextCompressor.THRESHOLD;
   }
 
-  async compress(messages: FormattedMessage[]): Promise<CompressResult> {
+  async compress(messages: CompressMessage[]): Promise<CompressResult> {
     if (messages.length === 0) {
       return { summary: '', messagesCompressed: 0, messagesKept: 0 };
     }
@@ -62,6 +65,10 @@ export class ContextCompressor {
     return `<context_summary type="compressed" compressed_at="${escapeXml(compressedAt)}">\nEarlier conversation summary (auto-generated):\n${escapeXml(summary)}\n</context_summary>`;
   }
 
+  buildSummaryBlock(summary: string): string {
+    return this.formatSummaryBlock(summary);
+  }
+
   private getAnthropic(): Anthropic {
     if (!this.anthropic) {
       this.anthropic = new Anthropic();
@@ -69,9 +76,12 @@ export class ContextCompressor {
     return this.anthropic;
   }
 
-  private async callHaiku(messages: FormattedMessage[]): Promise<string> {
+  private async callHaiku(messages: CompressMessage[]): Promise<string> {
     const transcript = messages
-      .map((message) => `[${message.sender}]: ${message.content}`)
+      .map(
+        (message) =>
+          `[${message.role ?? message.sender ?? 'unknown'}]: ${message.content}`,
+      )
       .join('\n');
     const anthropic = this.getAnthropic();
     const response = await anthropic.messages.create({

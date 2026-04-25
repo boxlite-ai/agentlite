@@ -13,15 +13,39 @@ function buildMessages(count: number): FormattedMessage[] {
   }));
 }
 
+function createAnthropicMock(summary = 'compact summary'): Anthropic {
+  return {
+    messages: {
+      create: vi.fn(async () => ({
+        content: [{ type: 'text', text: summary }],
+      })),
+    },
+  } as unknown as Anthropic;
+}
+
 describe('ContextCompressor', () => {
-  it('needsCompression uses the 80% threshold', () => {
-    const compressor = new ContextCompressor({} as Anthropic);
+  it('returns false for null utilization', () => {
+    const compressor = new ContextCompressor(createAnthropicMock());
 
     expect(compressor.needsCompression(null)).toBe(false);
+  });
+
+  it('returns false below 80% utilization', () => {
+    const compressor = new ContextCompressor(createAnthropicMock());
+
     expect(compressor.needsCompression(0.79)).toBe(false);
+  });
+
+  it('returns true at 80% utilization', () => {
+    const compressor = new ContextCompressor(createAnthropicMock());
+
     expect(compressor.needsCompression(0.8)).toBe(true);
-    expect(compressor.needsCompression(0.85)).toBe(true);
-    expect(compressor.needsCompression(1.0)).toBe(true);
+  });
+
+  it('returns true above 80% utilization', () => {
+    const compressor = new ContextCompressor(createAnthropicMock());
+
+    expect(compressor.needsCompression(0.95)).toBe(true);
   });
 
   it('compress keeps the most recent 20% and summarizes the rest', async () => {
@@ -58,6 +82,22 @@ describe('ContextCompressor', () => {
     );
   });
 
+  it('compress keeps a single message and skips summarization', async () => {
+    const anthropic = createAnthropicMock();
+    const compressor = new ContextCompressor(anthropic);
+
+    const result = await compressor.compress([
+      { sender: 'User', content: 'one' },
+    ]);
+
+    expect(result).toEqual({
+      summary: '',
+      messagesCompressed: 0,
+      messagesKept: 1,
+    });
+    expect(anthropic.messages.create).not.toHaveBeenCalled();
+  });
+
   it('formatSummaryBlock wraps and escapes summary content', () => {
     const compressor = new ContextCompressor({} as Anthropic);
 
@@ -70,5 +110,21 @@ describe('ContextCompressor', () => {
     expect(block).toContain('compressed_at="2026-04-25T00:00:00.000Z"');
     expect(block).toContain('Use &lt;tags&gt; &amp; &quot;quotes&quot;');
     expect(block).toContain('</context_summary>');
+  });
+
+  it('calls Haiku with the expected model', async () => {
+    const anthropic = createAnthropicMock();
+    const compressor = new ContextCompressor(anthropic);
+
+    await compressor.compress([
+      { sender: 'user', content: 'old context' },
+      { sender: 'assistant', content: 'new context' },
+    ]);
+
+    expect(anthropic.messages.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: 'claude-haiku-4-5-20251001',
+      }),
+    );
   });
 });
