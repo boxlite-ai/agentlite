@@ -31,6 +31,7 @@ import type {
 import { logger } from '../logger.js';
 import {
   summarizeArgs,
+  type AgentToolResult,
   type AgentStatus,
   writeStatusFile,
 } from './status-writer.js';
@@ -54,16 +55,27 @@ export interface ActionsHttpInfo {
   port: number;
 }
 
-function summarizeToolResult(result: unknown): string | null {
+function summarizeToolResult(
+  toolName: string | null,
+  result: unknown,
+  isError = false,
+): AgentToolResult | null {
   if (result == null) {
     return null;
   }
 
+  let preview: string;
   try {
-    return JSON.stringify(result).slice(0, 200);
+    preview = typeof result === 'string' ? result : JSON.stringify(result);
   } catch {
-    return String(result).slice(0, 200);
+    preview = String(result);
   }
+
+  return {
+    toolName,
+    preview: preview.slice(0, 200),
+    ...(isError ? { isError: true } : {}),
+  };
 }
 
 export class ActionsHttp {
@@ -72,6 +84,8 @@ export class ActionsHttp {
   private tokens = new Map<string, TokenBinding>();
   private turnCount = 0;
   private lastWrittenStatus: AgentStatus | null = null;
+  private currentTaskId: string | null = null;
+  private readonly toolNamesByUseId = new Map<string, string>();
 
   constructor(
     private getActions: () => Map<string, RegisteredAction>,
@@ -160,14 +174,16 @@ export class ActionsHttp {
   }
 
   writeTerminalStatus(status: 'done' | 'error'): void {
-    const previous = this.lastWrittenStatus ?? this.buildStatus({
-      currentTool: null,
-      lastToolDurationMs: null,
-      lastToolResult: null,
-      phase: 'idle',
-      status: 'idle',
-      toolArgsSummary: null,
-    });
+    const previous =
+      this.lastWrittenStatus ??
+      this.buildStatus({
+        currentTool: null,
+        lastToolDurationMs: null,
+        lastToolResult: null,
+        phase: 'idle',
+        status: 'idle',
+        toolArgsSummary: null,
+      });
 
     this.writeStatus({
       ...previous,
@@ -214,7 +230,12 @@ export class ActionsHttp {
   writeToolCallingStatus(
     currentTool: string,
     toolArgsSummary: string | null = null,
+    toolUseId: string | null = null,
   ): void {
+    if (toolUseId) {
+      this.toolNamesByUseId.set(toolUseId, currentTool);
+    }
+
     this.writeStatus(
       this.buildStatus({
         currentTool,
@@ -227,17 +248,64 @@ export class ActionsHttp {
     );
   }
 
-  writeToolResultStatus(result: unknown): void {
+  writeToolResultStatus(
+    result: unknown,
+    toolUseId: string | null = null,
+    isError = false,
+  ): void {
     const previous = this.lastWrittenStatus;
+    const toolName = toolUseId
+      ? (this.toolNamesByUseId.get(toolUseId) ?? previous?.currentTool ?? null)
+      : (previous?.currentTool ?? null);
+
+    if (toolUseId) {
+      this.toolNamesByUseId.delete(toolUseId);
+    }
 
     this.writeStatus(
       this.buildStatus({
         currentTool: null,
         lastToolDurationMs: previous?.lastToolDurationMs ?? null,
-        lastToolResult: summarizeToolResult(result),
-        phase: 'tool_call_done',
-        status: 'idle',
+        lastToolResult: summarizeToolResult(toolName, result, isError),
+        phase: isError ? 'error' : 'tool_call_done',
+        status: isError ? 'error' : 'idle',
         toolArgsSummary: previous?.toolArgsSummary ?? null,
+      }),
+    );
+  }
+
+  writeTaskStartedStatus(taskId: string): void {
+    this.currentTaskId = taskId;
+    this.writeWaitingStatus('scheduled task started');
+  }
+
+  writeTaskFinishedStatus(
+    taskId: string,
+    status: 'done' | 'error' | 'idle',
+    result: unknown = null,
+  ): void {
+    if (this.currentTaskId === taskId) {
+      this.currentTaskId = null;
+    }
+
+    const previous = this.lastWrittenStatus;
+    this.writeStatus(
+      this.buildStatus({
+        currentTool: null,
+        lastToolDurationMs: previous?.lastToolDurationMs ?? null,
+        lastToolResult:
+          summarizeToolResult('scheduled task', result, status === 'error') ??
+          previous?.lastToolResult ??
+          null,
+        phase:
+          status === 'error' ? 'error' : status === 'done' ? 'done' : 'idle',
+        status,
+        toolArgsSummary:
+          status === 'error'
+            ? 'scheduled task failed'
+            : status === 'done'
+              ? 'scheduled task completed'
+              : 'scheduled task skipped',
       }),
     );
   }
@@ -335,7 +403,7 @@ export class ActionsHttp {
       try {
         const result = await entry.handler(actionPayload, ctx);
         const previous = this.lastWrittenStatus;
-        const resultSummary = summarizeToolResult(result);
+        const resultSummary = summarizeToolResult(name, result);
         this.writeStatus(
           this.buildStatus({
             currentTool: null,
@@ -343,7 +411,8 @@ export class ActionsHttp {
             lastToolResult: resultSummary,
             phase: 'tool_call_done',
             status: 'idle',
-            toolArgsSummary: previous?.toolArgsSummary ?? summarizeArgs(name, actionPayload),
+            toolArgsSummary:
+              previous?.toolArgsSummary ?? summarizeArgs(name, actionPayload),
           }),
         );
         res.writeHead(200, { 'content-type': 'application/json' });
@@ -354,10 +423,18 @@ export class ActionsHttp {
           this.buildStatus({
             currentTool: null,
             lastToolDurationMs: Date.now() - callStart,
-            lastToolResult: previous?.lastToolResult ?? null,
+            lastToolResult:
+              summarizeToolResult(
+                name,
+                err instanceof Error ? err.message : String(err),
+                true,
+              ) ??
+              previous?.lastToolResult ??
+              null,
             phase: 'error',
             status: 'error',
-            toolArgsSummary: previous?.toolArgsSummary ?? summarizeArgs(name, actionPayload),
+            toolArgsSummary:
+              previous?.toolArgsSummary ?? summarizeArgs(name, actionPayload),
           }),
         );
         logger.warn({ action: name, err }, 'Custom action handler threw');
@@ -378,7 +455,12 @@ export class ActionsHttp {
   private buildStatus(
     overrides: Pick<
       AgentStatus,
-      'currentTool' | 'lastToolDurationMs' | 'lastToolResult' | 'phase' | 'status' | 'toolArgsSummary'
+      | 'currentTool'
+      | 'lastToolDurationMs'
+      | 'lastToolResult'
+      | 'phase'
+      | 'status'
+      | 'toolArgsSummary'
     >,
   ): AgentStatus {
     const previous = this.lastWrittenStatus;
@@ -386,8 +468,10 @@ export class ActionsHttp {
     return {
       schemaVersion: 1,
       updatedAt: new Date().toISOString(),
-      agentId: this.statusConfig?.agentId ?? previous?.agentId ?? 'unknown-agent',
-      agentName: this.statusConfig?.agentName ?? previous?.agentName ?? 'Unknown Agent',
+      agentId:
+        this.statusConfig?.agentId ?? previous?.agentId ?? 'unknown-agent',
+      agentName:
+        this.statusConfig?.agentName ?? previous?.agentName ?? 'Unknown Agent',
       status: overrides.status,
       phase: overrides.phase,
       currentTool: overrides.currentTool,
@@ -395,13 +479,17 @@ export class ActionsHttp {
       lastToolDurationMs: overrides.lastToolDurationMs,
       lastToolResult: overrides.lastToolResult,
       turnCount: this.turnCount,
+      currentTaskId: this.currentTaskId,
       workItemId: null,
       workItemTitle: previous?.workItemTitle ?? null,
-      sessionId: this.statusConfig?.sessionId ?? previous?.sessionId ?? 'unknown-session',
+      sessionId:
+        this.statusConfig?.sessionId ??
+        previous?.sessionId ??
+        'unknown-session',
       sessionStartedAt:
-        this.statusConfig?.sessionStartedAt
-        ?? previous?.sessionStartedAt
-        ?? new Date().toISOString(),
+        this.statusConfig?.sessionStartedAt ??
+        previous?.sessionStartedAt ??
+        new Date().toISOString(),
     };
   }
 

@@ -539,7 +539,10 @@ export class AgentImpl
     }
 
     this.fatalSignal = signal;
-    logger.warn({ agent: this.name, signal }, 'Agent process received a shutdown signal');
+    logger.warn(
+      { agent: this.name, signal },
+      'Agent process received a shutdown signal',
+    );
     this.actionsHttp.writeTerminalStatus('error');
   }
 
@@ -548,15 +551,21 @@ export class AgentImpl
       this.actionsHttp.writeToolCallingStatus(
         event.toolName,
         event.input ? String(event.input).slice(0, 200) : event.toolName,
+        event.toolUseId,
       );
     });
 
     this.on('run.sdk_message', (event) => {
       const msg = event.message;
 
-      if (event.sdkType === 'assistant' && Array.isArray(msg?.message?.content)) {
+      if (
+        event.sdkType === 'assistant' &&
+        Array.isArray(msg?.message?.content)
+      ) {
         const text = (msg.message.content as Array<Record<string, unknown>>)
-          .filter((block) => block.type === 'text' && typeof block.text === 'string')
+          .filter(
+            (block) => block.type === 'text' && typeof block.text === 'string',
+          )
           .map((block) => String(block.text).trim())
           .filter(Boolean)
           .join('\n')
@@ -568,12 +577,18 @@ export class AgentImpl
       }
 
       if (event.sdkType === 'user' && Array.isArray(msg?.message?.content)) {
-        for (const block of msg.message.content as Array<Record<string, unknown>>) {
+        for (const block of msg.message.content as Array<
+          Record<string, unknown>
+        >) {
           if (block.type !== 'tool_result') {
             continue;
           }
 
-          this.actionsHttp.writeToolResultStatus(block.content ?? null);
+          this.actionsHttp.writeToolResultStatus(
+            block.content ?? null,
+            typeof block.tool_use_id === 'string' ? block.tool_use_id : null,
+            Boolean(block.is_error),
+          );
           break;
         }
       }
@@ -581,6 +596,30 @@ export class AgentImpl
 
     this.on('task.run.queued', () => {
       this.actionsHttp.writeWaitingStatus('scheduled task queued');
+    });
+    this.on('task.run.started', (event) => {
+      this.actionsHttp.writeTaskStartedStatus(event.taskId);
+    });
+    this.on('task.run.succeeded', (event) => {
+      this.actionsHttp.writeTaskFinishedStatus(
+        event.taskId,
+        'done',
+        event.result,
+      );
+    });
+    this.on('task.run.failed', (event) => {
+      this.actionsHttp.writeTaskFinishedStatus(
+        event.taskId,
+        'error',
+        event.error,
+      );
+    });
+    this.on('task.run.skipped', (event) => {
+      this.actionsHttp.writeTaskFinishedStatus(
+        event.taskId,
+        'idle',
+        event.reason,
+      );
     });
   }
 

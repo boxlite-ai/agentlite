@@ -1,6 +1,12 @@
 import { mkdirSync, renameSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 
+export interface AgentToolResult {
+  toolName: string | null;
+  preview: string;
+  isError?: boolean;
+}
+
 export interface AgentStatus {
   schemaVersion: 1;
   updatedAt: string;
@@ -11,8 +17,9 @@ export interface AgentStatus {
   currentTool: string | null;
   toolArgsSummary: string | null;
   lastToolDurationMs: number | null;
-  lastToolResult: string | null;
+  lastToolResult: AgentToolResult | null;
   turnCount: number;
+  currentTaskId: string | null;
   workItemId: string | null;
   workItemTitle: string | null;
   sessionId: string;
@@ -32,14 +39,16 @@ export function writeStatusFile(dataDir: string, status: AgentStatus): void {
 export function summarizeArgs(toolName: string, payload: unknown): string {
   const record =
     payload && typeof payload === 'object'
-      ? payload as Record<string, unknown>
+      ? (payload as Record<string, unknown>)
       : {};
 
   switch (toolName) {
     case 'Read':
     case 'Write':
     case 'Edit':
-      return `file: ${String(record.file_path ?? '?').split('/').pop()}`;
+      return `file: ${String(record.file_path ?? '?')
+        .split('/')
+        .pop()}`;
     case 'Bash':
       return `$ ${String(record.command ?? '').slice(0, 80)}`;
     case 'call_action':

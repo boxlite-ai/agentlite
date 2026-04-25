@@ -31,6 +31,7 @@ function createStatus(overrides: Partial<AgentStatus> = {}): AgentStatus {
     lastToolDurationMs: null,
     lastToolResult: null,
     turnCount: 2,
+    currentTaskId: null,
     workItemId: 'item-1',
     workItemTitle: 'Instrument agent activity',
     sessionId: 'session-1',
@@ -65,8 +66,16 @@ describe('status-writer', () => {
   it.each([
     ['Read', { file_path: '/tmp/project/src/index.ts' }, 'file: index.ts'],
     ['Write', { file_path: '/tmp/project/src/index.ts' }, 'file: index.ts'],
-    ['Bash', { command: 'printf "hello"\n'.repeat(10) }, `$ ${'printf "hello"\n'.repeat(10).slice(0, 80)}`],
-    ['call_action', { name: 'workflow_items_move' }, 'action: workflow_items_move'],
+    [
+      'Bash',
+      { command: 'printf "hello"\n'.repeat(10) },
+      `$ ${'printf "hello"\n'.repeat(10).slice(0, 80)}`,
+    ],
+    [
+      'call_action',
+      { name: 'workflow_items_move' },
+      'action: workflow_items_move',
+    ],
     ['UnknownTool', { anything: true }, 'UnknownTool'],
   ])('summarizes %s arguments', (toolName, payload, expected) => {
     expect(summarizeArgs(toolName, payload)).toBe(expected);
