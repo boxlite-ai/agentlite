@@ -34,17 +34,6 @@ export interface AgentEvents extends Record<string, any[]> {
   stopped: [];
 }
 
-export type EventPayloadMap = {
-  context_compressed: {
-    agentId: string;
-    jid: string;
-    utilization: number;
-    messagesCompressed: number;
-    messagesKept: number;
-    timestamp: string;
-  };
-};
-
 /** A group was registered with the agent. */
 export interface GroupRegisteredEvent {
   /** Stable group/chat identifier from the channel. */
