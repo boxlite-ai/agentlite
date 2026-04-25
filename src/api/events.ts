@@ -35,7 +35,7 @@ export interface AgentEvents extends Record<string, any[]> {
 }
 
 export type EventPayloadMap = {
-  'context_compressed': {
+  context_compressed: {
     agentId: string;
     jid: string;
     utilization: number;

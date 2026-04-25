@@ -201,10 +201,6 @@ export class AgentDb {
     private dataDir: string,
   ) {}
 
-  private contextUtilizationKey(groupJid: string): string {
-    return `context_utilization:${groupJid}`;
-  }
-
   close(): void {
     this.db.close();
   }
@@ -560,25 +556,33 @@ export class AgentDb {
       .run(key, value);
   }
 
-  setContextUtilization(groupJid: string, utilization: number | null): void {
-    this.db.prepare(
-      `INSERT INTO router_state (group_jid, context_utilization, context_utilization_at)
-     VALUES (?, ?, ?)
-     ON CONFLICT(group_jid) DO UPDATE SET
-       context_utilization = excluded.context_utilization,
-       context_utilization_at = excluded.context_utilization_at`
-    ).run(groupJid, utilization, utilization !== null ? Date.now() : null);
+  setContextUtilization(groupJid: string, utilization: number): void {
+    this.db
+      .prepare(
+        `INSERT INTO router_state (key, value, context_utilization, context_utilization_at)
+         VALUES (?, '', ?, ?)
+         ON CONFLICT(key) DO UPDATE SET
+           context_utilization = excluded.context_utilization,
+           context_utilization_at = excluded.context_utilization_at`,
+      )
+      .run(`context_utilization:${groupJid}`, utilization, Date.now());
   }
 
   getContextUtilization(groupJid: string): number | null {
-    const row = this.db.prepare(
-      `SELECT context_utilization FROM router_state WHERE group_jid = ?`
-    ).get(groupJid) as { context_utilization: number | null } | undefined;
+    const row = this.db
+      .prepare('SELECT context_utilization FROM router_state WHERE key = ?')
+      .get(`context_utilization:${groupJid}`) as
+      | { context_utilization: number | null }
+      | undefined;
     return row?.context_utilization ?? null;
   }
 
   clearContextUtilization(groupJid: string): void {
-    this.setContextUtilization(groupJid, null);
+    this.db
+      .prepare(
+        'UPDATE router_state SET context_utilization = NULL, context_utilization_at = NULL WHERE key = ?',
+      )
+      .run(`context_utilization:${groupJid}`);
   }
 
   // --- Sessions ---
