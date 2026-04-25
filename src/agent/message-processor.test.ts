@@ -9,7 +9,7 @@ const contextCompressionMocks = vi.hoisted(() => ({
     (utilization: number | null) => utilization !== null && utilization >= 0.8,
   ),
   compress: vi.fn(
-    async (messages: Array<{ sender: string; content: string }>) => {
+    async (messages: Array<{ role: string; content: string }>) => {
       const kept = Math.max(1, Math.floor(messages.length * 0.2));
       return {
         summary: 'condensed history',
@@ -36,7 +36,7 @@ vi.mock('./context-compressor.js', () => ({
       return contextCompressionMocks.needsCompression(utilization);
     }
 
-    compress(messages: Array<{ sender: string; content: string }>) {
+    compress(messages: Array<{ role: string; content: string }>) {
       return contextCompressionMocks.compress(messages);
     }
 
@@ -140,7 +140,7 @@ beforeEach(() => {
   );
   contextCompressionMocks.compress.mockReset();
   contextCompressionMocks.compress.mockImplementation(
-    async (messages: Array<{ sender: string; content: string }>) => {
+    async (messages: Array<{ role: string; content: string }>) => {
       const kept = Math.max(1, Math.floor(messages.length * 0.2));
       return {
         summary: 'condensed history',

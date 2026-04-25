@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ContextCompressor, FormattedMessage } from './context-compressor';
+import { ContextCompressor, CompressMessage } from './context-compressor';
 
 const mockCreate = vi.fn();
 const mockAnthropic = { messages: { create: mockCreate } } as any;
@@ -31,9 +31,9 @@ describe('ContextCompressor', () => {
   });
 
   describe('compress', () => {
-    const makeMessages = (n: number): FormattedMessage[] =>
+    const makeMessages = (n: number): CompressMessage[] =>
       Array.from({ length: n }, (_, i) => ({
-        sender: 'user',
+        role: 'user',
         content: `msg ${i}`,
       }));
 

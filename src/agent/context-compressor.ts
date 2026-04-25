@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 
-export interface FormattedMessage {
-  sender: string;
+export interface CompressMessage {
+  role: string;
   content: string;
 }
 
@@ -21,7 +21,7 @@ export class ContextCompressor {
     return utilization !== null && utilization >= ContextCompressor.THRESHOLD;
   }
 
-  async compress(messages: FormattedMessage[]): Promise<CompressResult> {
+  async compress(messages: CompressMessage[]): Promise<CompressResult> {
     const keepCount = Math.max(
       1,
       Math.floor(messages.length * ContextCompressor.KEEP_RATIO),
@@ -36,9 +36,9 @@ export class ContextCompressor {
     };
   }
 
-  private async callHaiku(messages: FormattedMessage[]): Promise<string> {
+  private async callHaiku(messages: CompressMessage[]): Promise<string> {
     const transcript = messages
-      .map((m) => `[${m.sender}]: ${m.content}`)
+      .map((m) => `[${m.role}]: ${m.content}`)
       .join('\n');
     const response = await this.anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
