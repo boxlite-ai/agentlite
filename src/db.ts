@@ -561,30 +561,19 @@ export class AgentDb {
   }
 
   setContextUtilization(groupJid: string, utilization: number | null): void {
-    this.db
-      .prepare(
-        `
-        INSERT INTO router_state (key, value, context_utilization, context_utilization_at)
-        VALUES (?, '', ?, ?)
-        ON CONFLICT(key) DO UPDATE SET
-          value = excluded.value,
-          context_utilization = excluded.context_utilization,
-          context_utilization_at = excluded.context_utilization_at
-      `,
-      )
-      .run(
-        this.contextUtilizationKey(groupJid),
-        utilization,
-        utilization !== null ? Date.now() : null,
-      );
+    this.db.prepare(
+      `INSERT INTO router_state (group_jid, context_utilization, context_utilization_at)
+     VALUES (?, ?, ?)
+     ON CONFLICT(group_jid) DO UPDATE SET
+       context_utilization = excluded.context_utilization,
+       context_utilization_at = excluded.context_utilization_at`
+    ).run(groupJid, utilization, utilization !== null ? Date.now() : null);
   }
 
   getContextUtilization(groupJid: string): number | null {
-    const row = this.db
-      .prepare('SELECT context_utilization FROM router_state WHERE key = ?')
-      .get(this.contextUtilizationKey(groupJid)) as
-      | { context_utilization: number | null }
-      | undefined;
+    const row = this.db.prepare(
+      `SELECT context_utilization FROM router_state WHERE group_jid = ?`
+    ).get(groupJid) as { context_utilization: number | null } | undefined;
     return row?.context_utilization ?? null;
   }
 
