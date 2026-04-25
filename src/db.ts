@@ -201,10 +201,6 @@ export class AgentDb {
     private dataDir: string,
   ) {}
 
-  private contextUtilizationKey(groupJid: string): string {
-    return `context_utilization:${groupJid}`;
-  }
-
   close(): void {
     this.db.close();
   }
@@ -560,31 +556,32 @@ export class AgentDb {
       .run(key, value);
   }
 
+  private contextUtilizationKey(groupJid: string): string {
+    return `context_utilization:${groupJid}`;
+  }
+
   setContextUtilization(groupJid: string, utilization: number | null): void {
-    this.db
-      .prepare(
-        `
-        INSERT INTO router_state (key, value, context_utilization, context_utilization_at)
-        VALUES (?, '', ?, ?)
-        ON CONFLICT(key) DO UPDATE SET
-          value = excluded.value,
-          context_utilization = excluded.context_utilization,
-          context_utilization_at = excluded.context_utilization_at
-      `,
-      )
-      .run(
-        this.contextUtilizationKey(groupJid),
-        utilization,
-        utilization !== null ? Date.now() : null,
-      );
+    const key = this.contextUtilizationKey(groupJid);
+    if (utilization === null) {
+      this.db.prepare('DELETE FROM router_state WHERE key = ?').run(key);
+    } else {
+      this.db
+        .prepare(
+          `INSERT INTO router_state (key, value, context_utilization, context_utilization_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(key) DO UPDATE SET
+         context_utilization = excluded.context_utilization,
+         context_utilization_at = excluded.context_utilization_at`,
+        )
+        .run(key, '', utilization, Date.now());
+    }
   }
 
   getContextUtilization(groupJid: string): number | null {
+    const key = this.contextUtilizationKey(groupJid);
     const row = this.db
-      .prepare('SELECT context_utilization FROM router_state WHERE key = ?')
-      .get(this.contextUtilizationKey(groupJid)) as
-      | { context_utilization: number | null }
-      | undefined;
+      .prepare(`SELECT context_utilization FROM router_state WHERE key = ?`)
+      .get(key) as { context_utilization: number | null } | undefined;
     return row?.context_utilization ?? null;
   }
 
