@@ -28,6 +28,7 @@ function createStatus(overrides: Partial<AgentStatus> = {}): AgentStatus {
     phase: 'tool_call_start',
     currentTool: 'Read',
     toolArgsSummary: 'file: index.ts',
+    lastToolResultSummary: null,
     lastToolDurationMs: null,
     lastToolResult: null,
     turnCount: 2,

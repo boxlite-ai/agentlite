@@ -236,6 +236,7 @@ async function runTask(
   );
 
   try {
+    deps.actionsHttp.writeThinkingStatus();
     const output = await runContainerAgent(
       group,
       {
@@ -312,6 +313,8 @@ async function runTask(
     if (closeTimer) clearTimeout(closeTimer);
     error = err instanceof Error ? err.message : String(err);
     logger.error({ taskId: task.id, error }, 'Task failed');
+  } finally {
+    deps.actionsHttp.writeIdleStatus();
   }
 
   const durationMs = Date.now() - startTime;
@@ -410,6 +413,7 @@ export function startSchedulerLoop(deps: SchedulerDependencies): {
           timestamp: new Date().toISOString(),
         });
 
+        deps.actionsHttp.writeWaitingStatus();
         deps.queue.enqueueTask(currentTask.chat_jid, currentTask.id, () =>
           runTask(currentTask, deps),
         );

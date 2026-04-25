@@ -129,6 +129,7 @@ describe('ActionsHttp', () => {
         phase: 'idle',
         currentTool: null,
         toolArgsSummary: null,
+        lastToolResultSummary: null,
         lastToolDurationMs: null,
         lastToolResult: null,
         turnCount: 0,
@@ -170,6 +171,7 @@ describe('ActionsHttp', () => {
         phase: 'tool_call_start',
         currentTool: 'workflow_items_move',
         toolArgsSummary: 'workflow_items_move',
+        lastToolResultSummary: null,
         lastToolDurationMs: null,
         lastToolResult: null,
         turnCount: 1,
@@ -189,6 +191,7 @@ describe('ActionsHttp', () => {
         phase: 'tool_call_done',
         currentTool: null,
         toolArgsSummary: 'workflow_items_move',
+        lastToolResultSummary: '{"ok":true}',
         lastToolDurationMs: expect.any(Number),
         lastToolResult: {
           toolName: 'workflow_items_move',
@@ -231,6 +234,7 @@ describe('ActionsHttp', () => {
         phase: 'error',
         currentTool: null,
         toolArgsSummary: 'workflow_tasks_update',
+        lastToolResultSummary: null,
         lastToolDurationMs: expect.any(Number),
         lastToolResult: {
           toolName: 'workflow_tasks_update',

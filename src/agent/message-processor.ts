@@ -368,6 +368,7 @@ export class MessageProcessor {
         group.folder,
         isMain,
       );
+      this.ctx.actionsHttp.writeThinkingStatus();
       const output = await runContainerAgent(
         group,
         {
@@ -410,6 +411,8 @@ export class MessageProcessor {
     } catch (err) {
       logger.error({ group: group.name, err }, 'Agent error');
       return 'error';
+    } finally {
+      this.ctx.actionsHttp.writeIdleStatus();
     }
   }
 

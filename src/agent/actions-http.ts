@@ -78,6 +78,18 @@ function summarizeToolResult(
   };
 }
 
+function summarizeResult(result: unknown): string | null {
+  if (result === undefined || result === null) {
+    return null;
+  }
+
+  try {
+    return JSON.stringify(result).slice(0, 200);
+  } catch {
+    return String(result).slice(0, 200);
+  }
+}
+
 export class ActionsHttp {
   private server: http.Server | null = null;
   private info: ActionsHttpInfo | null = null;
@@ -407,6 +419,7 @@ export class ActionsHttp {
         this.writeStatus(
           this.buildStatus({
             currentTool: null,
+            lastToolResultSummary: summarizeResult(result),
             lastToolDurationMs: Date.now() - callStart,
             lastToolResult: resultSummary,
             phase: 'tool_call_done',
@@ -422,6 +435,7 @@ export class ActionsHttp {
         this.writeStatus(
           this.buildStatus({
             currentTool: null,
+            lastToolResultSummary: null,
             lastToolDurationMs: Date.now() - callStart,
             lastToolResult:
               summarizeToolResult(
@@ -461,9 +475,14 @@ export class ActionsHttp {
       | 'phase'
       | 'status'
       | 'toolArgsSummary'
-    >,
+    > &
+      Partial<Pick<AgentStatus, 'lastToolResultSummary'>>,
   ): AgentStatus {
     const previous = this.lastWrittenStatus;
+    const hasLastToolResultSummary = Object.prototype.hasOwnProperty.call(
+      overrides,
+      'lastToolResultSummary',
+    );
 
     return {
       schemaVersion: 1,
@@ -476,6 +495,13 @@ export class ActionsHttp {
       phase: overrides.phase,
       currentTool: overrides.currentTool,
       toolArgsSummary: overrides.toolArgsSummary,
+      lastToolResultSummary: hasLastToolResultSummary
+        ? (overrides.lastToolResultSummary ?? null)
+        : overrides.phase === 'tool_call_start'
+          ? null
+          : (overrides.lastToolResult?.preview ??
+            previous?.lastToolResultSummary ??
+            null),
       lastToolDurationMs: overrides.lastToolDurationMs,
       lastToolResult: overrides.lastToolResult,
       turnCount: this.turnCount,
@@ -493,7 +519,7 @@ export class ActionsHttp {
     };
   }
 
-  private writeIdleStatus(): void {
+  writeIdleStatus(): void {
     const previous = this.lastWrittenStatus;
 
     this.writeStatus(

@@ -16,6 +16,7 @@ export interface AgentStatus {
   phase: 'tool_call_start' | 'tool_call_done' | 'idle' | 'done' | 'error';
   currentTool: string | null;
   toolArgsSummary: string | null;
+  lastToolResultSummary: string | null;
   lastToolDurationMs: number | null;
   lastToolResult: AgentToolResult | null;
   turnCount: number;
