@@ -22,7 +22,7 @@ import type { AgentContext } from './agent-context.js';
 import type { ChannelManager } from './channel-manager.js';
 import {
   ContextCompressor,
-  type FormattedMessage,
+  type CompressMessage,
 } from './context-compressor.js';
 import type { GroupManager } from './group-manager.js';
 import type { TaskManager } from './task-manager.js';
@@ -546,8 +546,8 @@ export class MessageProcessor {
 
     try {
       const result = await this.contextCompressor.compress(
-        recentMessages.map<FormattedMessage>((message) => ({
-          sender: message.sender_name || message.sender,
+        recentMessages.map<CompressMessage>((message) => ({
+          role: message.sender_name || message.sender,
           content: message.content,
         })),
       );
