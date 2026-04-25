@@ -79,12 +79,8 @@ function summarizeToolResult(
 }
 
 function summarizeResult(result: unknown): string | null {
-  if (result === undefined || result === null) {
-    return null;
-  }
-
   try {
-    return JSON.stringify(result).slice(0, 200);
+    return JSON.stringify(result ?? null).slice(0, 200);
   } catch {
     return String(result).slice(0, 200);
   }
@@ -217,7 +213,7 @@ export class ActionsHttp {
         currentTool: null,
         lastToolDurationMs: previous?.lastToolDurationMs ?? null,
         lastToolResult: previous?.lastToolResult ?? null,
-        phase: 'idle',
+        phase: 'thinking',
         status: 'thinking',
         toolArgsSummary,
       }),
@@ -232,7 +228,7 @@ export class ActionsHttp {
         currentTool: previous?.currentTool ?? null,
         lastToolDurationMs: previous?.lastToolDurationMs ?? null,
         lastToolResult: previous?.lastToolResult ?? null,
-        phase: 'idle',
+        phase: 'waiting',
         status: 'waiting',
         toolArgsSummary: toolArgsSummary ?? previous?.toolArgsSummary ?? null,
       }),

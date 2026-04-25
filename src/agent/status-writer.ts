@@ -13,7 +13,14 @@ export interface AgentStatus {
   agentId: string;
   agentName: string;
   status: 'idle' | 'thinking' | 'tool-calling' | 'waiting' | 'done' | 'error';
-  phase: 'tool_call_start' | 'tool_call_done' | 'idle' | 'done' | 'error';
+  phase:
+    | 'tool_call_start'
+    | 'tool_call_done'
+    | 'thinking'
+    | 'waiting'
+    | 'idle'
+    | 'done'
+    | 'error';
   currentTool: string | null;
   toolArgsSummary: string | null;
   lastToolResultSummary: string | null;
