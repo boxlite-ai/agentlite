@@ -85,9 +85,11 @@ function ensureProcessSignalHandlers(): void {
 
   process.on('SIGTERM', () => {
     notifyAgentsOfProcessSignal('SIGTERM');
+    process.exit(1);
   });
   process.on('SIGINT', () => {
     notifyAgentsOfProcessSignal('SIGINT');
+    process.exit(1);
   });
   processSignalHandlersInstalled = true;
 }
@@ -176,6 +178,7 @@ export class AgentImpl
       this.groupMgr,
       this.taskMgr,
     );
+    this.registerStatusWriterEventHooks();
   }
 
   // ─── Identity ───────────────────────────────────────────────────
@@ -538,6 +541,47 @@ export class AgentImpl
     this.fatalSignal = signal;
     logger.warn({ agent: this.name, signal }, 'Agent process received a shutdown signal');
     this.actionsHttp.writeTerminalStatus('error');
+  }
+
+  private registerStatusWriterEventHooks(): void {
+    this.on('run.tool', (event) => {
+      this.actionsHttp.writeToolCallingStatus(
+        event.toolName,
+        event.input ? String(event.input).slice(0, 200) : event.toolName,
+      );
+    });
+
+    this.on('run.sdk_message', (event) => {
+      const msg = event.message;
+
+      if (event.sdkType === 'assistant' && Array.isArray(msg?.message?.content)) {
+        const text = (msg.message.content as Array<Record<string, unknown>>)
+          .filter((block) => block.type === 'text' && typeof block.text === 'string')
+          .map((block) => String(block.text).trim())
+          .filter(Boolean)
+          .join('\n')
+          .slice(0, 200);
+
+        if (text) {
+          this.actionsHttp.writeThinkingStatus(text);
+        }
+      }
+
+      if (event.sdkType === 'user' && Array.isArray(msg?.message?.content)) {
+        for (const block of msg.message.content as Array<Record<string, unknown>>) {
+          if (block.type !== 'tool_result') {
+            continue;
+          }
+
+          this.actionsHttp.writeToolResultStatus(block.content ?? null);
+          break;
+        }
+      }
+    });
+
+    this.on('task.run.queued', () => {
+      this.actionsHttp.writeWaitingStatus('scheduled task queued');
+    });
   }
 
   // ─── Subsystem wiring ───────────────────────────────────────────

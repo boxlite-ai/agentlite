@@ -54,6 +54,18 @@ export interface ActionsHttpInfo {
   port: number;
 }
 
+function summarizeToolResult(result: unknown): string | null {
+  if (result == null) {
+    return null;
+  }
+
+  try {
+    return JSON.stringify(result).slice(0, 500);
+  } catch {
+    return String(result).slice(0, 500);
+  }
+}
+
 export class ActionsHttp {
   private server: http.Server | null = null;
   private info: ActionsHttpInfo | null = null;
@@ -152,6 +164,7 @@ export class ActionsHttp {
     const previous = this.lastWrittenStatus ?? this.buildStatus({
       currentTool: null,
       lastToolDurationMs: null,
+      lastToolResult: null,
       phase: 'idle',
       status: 'idle',
       toolArgsSummary: null,
@@ -161,11 +174,73 @@ export class ActionsHttp {
       ...previous,
       currentTool: null,
       lastToolDurationMs: previous.lastToolDurationMs,
+      lastToolResult: previous.lastToolResult,
       phase: status,
       status,
       toolArgsSummary: previous.toolArgsSummary,
       updatedAt: new Date().toISOString(),
     });
+  }
+
+  writeThinkingStatus(toolArgsSummary: string | null = null): void {
+    const previous = this.lastWrittenStatus;
+
+    this.writeStatus(
+      this.buildStatus({
+        currentTool: null,
+        lastToolDurationMs: previous?.lastToolDurationMs ?? null,
+        lastToolResult: previous?.lastToolResult ?? null,
+        phase: 'idle',
+        status: 'thinking',
+        toolArgsSummary,
+      }),
+    );
+  }
+
+  writeWaitingStatus(toolArgsSummary: string | null = null): void {
+    const previous = this.lastWrittenStatus;
+
+    this.writeStatus(
+      this.buildStatus({
+        currentTool: previous?.currentTool ?? null,
+        lastToolDurationMs: previous?.lastToolDurationMs ?? null,
+        lastToolResult: previous?.lastToolResult ?? null,
+        phase: 'idle',
+        status: 'waiting',
+        toolArgsSummary: toolArgsSummary ?? previous?.toolArgsSummary ?? null,
+      }),
+    );
+  }
+
+  writeToolCallingStatus(
+    currentTool: string,
+    toolArgsSummary: string | null = null,
+  ): void {
+    this.writeStatus(
+      this.buildStatus({
+        currentTool,
+        lastToolDurationMs: null,
+        lastToolResult: null,
+        phase: 'tool_call_start',
+        status: 'tool-calling',
+        toolArgsSummary: toolArgsSummary ?? currentTool,
+      }),
+    );
+  }
+
+  writeToolResultStatus(result: unknown): void {
+    const previous = this.lastWrittenStatus;
+
+    this.writeStatus(
+      this.buildStatus({
+        currentTool: null,
+        lastToolDurationMs: previous?.lastToolDurationMs ?? null,
+        lastToolResult: summarizeToolResult(result),
+        phase: 'tool_call_done',
+        status: 'idle',
+        toolArgsSummary: previous?.toolArgsSummary ?? null,
+      }),
+    );
   }
 
   private async handle(
@@ -253,18 +328,21 @@ export class ActionsHttp {
         this.buildStatus({
           currentTool: name,
           lastToolDurationMs: null,
+          lastToolResult: null,
           phase: 'tool_call_start',
-          status: 'working',
+          status: 'tool-calling',
           toolArgsSummary: summarizeArgs(name, actionPayload),
         }),
       );
       try {
         const result = await entry.handler(actionPayload, ctx);
         const previous = this.lastWrittenStatus;
+        const resultSummary = summarizeToolResult(result);
         this.writeStatus(
           this.buildStatus({
             currentTool: null,
             lastToolDurationMs: Date.now() - callStart,
+            lastToolResult: resultSummary,
             phase: 'tool_call_done',
             status: 'idle',
             toolArgsSummary: previous?.toolArgsSummary ?? summarizeArgs(name, actionPayload),
@@ -278,6 +356,7 @@ export class ActionsHttp {
           this.buildStatus({
             currentTool: null,
             lastToolDurationMs: Date.now() - callStart,
+            lastToolResult: previous?.lastToolResult ?? null,
             phase: 'error',
             status: 'error',
             toolArgsSummary: previous?.toolArgsSummary ?? summarizeArgs(name, actionPayload),
@@ -301,7 +380,7 @@ export class ActionsHttp {
   private buildStatus(
     overrides: Pick<
       AgentStatus,
-      'currentTool' | 'lastToolDurationMs' | 'phase' | 'status' | 'toolArgsSummary'
+      'currentTool' | 'lastToolDurationMs' | 'lastToolResult' | 'phase' | 'status' | 'toolArgsSummary'
     >,
   ): AgentStatus {
     const previous = this.lastWrittenStatus;
@@ -316,6 +395,7 @@ export class ActionsHttp {
       currentTool: overrides.currentTool,
       toolArgsSummary: overrides.toolArgsSummary,
       lastToolDurationMs: overrides.lastToolDurationMs,
+      lastToolResult: overrides.lastToolResult,
       turnCount: this.turnCount,
       workItemId: this.lastKnownWorkItemId,
       workItemTitle: previous?.workItemTitle ?? null,
@@ -346,10 +426,13 @@ export class ActionsHttp {
   }
 
   private writeIdleStatus(): void {
+    const previous = this.lastWrittenStatus;
+
     this.writeStatus(
       this.buildStatus({
         currentTool: null,
         lastToolDurationMs: null,
+        lastToolResult: previous?.lastToolResult ?? null,
         phase: 'idle',
         status: 'idle',
         toolArgsSummary: null,
