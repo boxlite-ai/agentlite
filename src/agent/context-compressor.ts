@@ -16,6 +16,15 @@ function isTextBlock(block: { type: string }): block is TextBlock {
   return block.type === 'text' && 'text' in block;
 }
 
+function escapeXml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
 export class ContextCompressor {
   private static readonly THRESHOLD = 0.8;
   private static readonly KEEP_RATIO = 0.2;
@@ -46,6 +55,13 @@ export class ContextCompressor {
     };
   }
 
+  formatSummaryBlock(
+    summary: string,
+    compressedAt: string = new Date().toISOString(),
+  ): string {
+    return `<context_summary type="compressed" compressed_at="${escapeXml(compressedAt)}">\nEarlier conversation summary (auto-generated):\n${escapeXml(summary)}\n</context_summary>`;
+  }
+
   private getAnthropic(): Anthropic {
     if (!this.anthropic) {
       this.anthropic = new Anthropic();
@@ -72,7 +88,9 @@ export class ContextCompressor {
     const textBlock = response.content.find(isTextBlock);
 
     if (!textBlock) {
-      throw new Error('Anthropic summary response did not include a text block');
+      throw new Error(
+        'Anthropic summary response did not include a text block',
+      );
     }
 
     return textBlock.text;

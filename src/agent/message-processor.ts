@@ -9,7 +9,7 @@ import {
   runContainerAgent,
   writeGroupsSnapshot,
 } from '../container-runner.js';
-import { escapeXml, findChannel, formatMessages } from '../router.js';
+import { findChannel, formatMessages } from '../router.js';
 import {
   isSenderAllowed,
   isTriggerAllowed,
@@ -566,7 +566,7 @@ export class MessageProcessor {
         timestamp: compressedAt,
       });
 
-      return `${this.buildContextSummaryBlock(result.summary, compressedAt)}\n${formatMessages(
+      return `${this.contextCompressor.formatSummaryBlock(result.summary, compressedAt)}\n${formatMessages(
         keptMessages,
         this.ctx.runtimeConfig.timezone,
       )}`;
@@ -577,13 +577,6 @@ export class MessageProcessor {
       );
       return prompt;
     }
-  }
-
-  private buildContextSummaryBlock(
-    summary: string,
-    compressedAt: string,
-  ): string {
-    return `<context_summary type="compressed" compressed_at="${escapeXml(compressedAt)}">\nEarlier conversation summary (auto-generated):\n${escapeXml(summary)}\n</context_summary>`;
   }
 
   private getRateLimitUtilization(message: unknown): number | null {

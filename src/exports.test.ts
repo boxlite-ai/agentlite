@@ -81,9 +81,7 @@ describe('package exports', () => {
       expect(keys).toContain('telegram');
     });
 
-    it(
-      'CJS telegram() returns a factory function',
-      () => {
+    it('CJS telegram() returns a factory function', () => {
       const result = execFileSync(
         'node',
         [
@@ -93,8 +91,6 @@ describe('package exports', () => {
         { cwd: repoRoot, encoding: 'utf-8' },
       );
       expect(result.trim()).toBe('function');
-      },
-      15_000,
-    );
+    }, 15_000);
   });
 });

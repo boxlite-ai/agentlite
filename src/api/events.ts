@@ -14,7 +14,7 @@ export interface AgentEvents extends Record<string, any[]> {
   'run.tool_progress': [payload: RunToolProgressEvent];
   'run.subagent': [payload: RunSubagentEvent];
   'run.status': [payload: RunStatusEvent];
-  'context_compressed': [payload: ContextCompressedEvent];
+  context_compressed: [payload: ContextCompressedEvent];
   'chat.metadata': [payload: ChatMetadataEvent];
   'channel.connected': [payload: { key: string }];
   'channel.disconnected': [payload: { key: string }];

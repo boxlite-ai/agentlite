@@ -57,4 +57,18 @@ describe('ContextCompressor', () => {
       '[User 9]: message 9',
     );
   });
+
+  it('formatSummaryBlock wraps and escapes summary content', () => {
+    const compressor = new ContextCompressor({} as Anthropic);
+
+    const block = compressor.formatSummaryBlock(
+      'Use <tags> & "quotes"',
+      '2026-04-25T00:00:00.000Z',
+    );
+
+    expect(block).toContain('<context_summary type="compressed"');
+    expect(block).toContain('compressed_at="2026-04-25T00:00:00.000Z"');
+    expect(block).toContain('Use &lt;tags&gt; &amp; &quot;quotes&quot;');
+    expect(block).toContain('</context_summary>');
+  });
 });
