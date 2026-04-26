@@ -43,6 +43,7 @@ export interface TokenUsageRow {
 
 export interface TokenUsageSummaryFilters {
   group_jid?: string;
+  group_jids?: string[];
   model?: string;
   since?: number;
 }
@@ -85,6 +86,15 @@ function buildTokenUsageWhere(filters: TokenUsageSummaryFilters): {
   if (filters.group_jid) {
     clauses.push('group_jid = ?');
     params.push(filters.group_jid);
+  } else if (filters.group_jids) {
+    if (filters.group_jids.length === 0) {
+      clauses.push('1 = 0');
+    } else {
+      clauses.push(
+        `group_jid IN (${filters.group_jids.map(() => '?').join(', ')})`,
+      );
+      params.push(...filters.group_jids);
+    }
   }
   if (filters.model) {
     clauses.push('model = ?');

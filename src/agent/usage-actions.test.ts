@@ -268,8 +268,20 @@ describe('usage_get_summary action', () => {
   });
 
   it('scopes results to sourceGroup for non-main callers', async () => {
+    agent.db.setRegisteredGroup('group-1@g.us', {
+      name: 'Group 1',
+      folder: 'test-group',
+      trigger: 'always',
+      added_at: '2026-04-19T00:00:00.000Z',
+    });
+    agent.db.setRegisteredGroup('group-2@g.us', {
+      name: 'Group 2',
+      folder: 'other-group',
+      trigger: 'always',
+      added_at: '2026-04-19T00:00:00.000Z',
+    });
     agent.db.recordTokenUsage({
-      group_jid: 'test-group',
+      group_jid: 'group-1@g.us',
       session_id: 'session-local',
       model: 'claude-haiku-4-5',
       prompt_tokens: 50,
@@ -278,7 +290,7 @@ describe('usage_get_summary action', () => {
       ts: 1_000,
     });
     agent.db.recordTokenUsage({
-      group_jid: 'other-group',
+      group_jid: 'group-2@g.us',
       session_id: 'session-other',
       model: 'claude-opus-4-6',
       prompt_tokens: 500,
@@ -287,12 +299,18 @@ describe('usage_get_summary action', () => {
       ts: 2_000,
     });
 
-    const response = await callSummary({ group_jid: 'other-group' });
+    const response = await callSummary();
     expect(response.status).toBe(200);
     expect(response.result.request_count).toBe(1);
     expect(response.result.total_tokens).toBe(75);
     expect(response.result.by_session).toHaveLength(1);
     expect(response.result.by_session[0]?.session_id).toBe('session-local');
+
+    const forbidden = await callSummary({ group_jid: 'group-2@g.us' });
+    expect(forbidden.status).toBe(200);
+    expect(forbidden.result.request_count).toBe(0);
+    expect(forbidden.result.total_tokens).toBe(0);
+    expect(forbidden.result.by_session).toHaveLength(0);
 
     const mainResponse = await callSummaryAsMain();
     expect(mainResponse.result.request_count).toBe(2);

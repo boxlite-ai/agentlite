@@ -121,6 +121,7 @@ export interface ContainerTokenUsageEvent {
     total_tokens: number;
     cache_read_tokens: number;
     cache_write_tokens: number;
+    cost_usd?: number | null;
     latency_ms: number;
     ts: number;
   };

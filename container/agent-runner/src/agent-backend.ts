@@ -113,6 +113,7 @@ interface RuntimeTokenUsageOutput {
     total_tokens: number;
     cache_read_tokens: number;
     cache_write_tokens: number;
+    cost_usd?: number | null;
     latency_ms: number;
     ts: number;
   };
@@ -305,59 +306,51 @@ export function waitForIpcMessage(
 }
 
 export function resolveUsageModel(
-  currentModel: string | undefined,
+  _currentModel: string | undefined,
   modelUsage: SDKResultMessage['modelUsage'],
 ): string | null {
   const models = Object.entries(modelUsage);
   if (models.length === 1) {
     return models[0]![0];
   }
-  if (models.length === 0) {
-    return null;
-  }
 
-  return models.slice().sort((a, b) => {
-    const totalA = a[1].inputTokens + a[1].outputTokens;
-    const totalB = b[1].inputTokens + b[1].outputTokens;
-    if (totalA !== totalB) return totalB - totalA;
-    return a[0].localeCompare(b[0]);
-  })[0]![0];
+  return null;
 }
 
-function captureTokenUsageSummary(params: {
+export function captureTokenUsageSummaries(params: {
   groupJid: string;
   sessionId: string | undefined;
   currentModel: string | undefined;
   queryStartedAt: number;
   message: SDKResultMessage;
-}): RuntimeTokenUsageOutput['usage'] | null {
-  const usage = params.message.usage;
-  const promptTokens = usage.input_tokens ?? 0;
-  const completionTokens = usage.output_tokens ?? 0;
-  const cacheReadTokens = usage.cache_read_input_tokens ?? 0;
-  const cacheWriteTokens = usage.cache_creation_input_tokens ?? 0;
+}): Array<RuntimeTokenUsageOutput['usage']> {
   const ts = Date.now();
-  const model = resolveUsageModel(
-    params.currentModel,
-    params.message.modelUsage,
+  const latencyMs = ts - params.queryStartedAt;
+
+  return Object.entries(params.message.modelUsage).map(
+    ([model, modelStats]) => {
+      const cacheReadTokens = modelStats.cacheReadInputTokens ?? 0;
+      const cacheWriteTokens = modelStats.cacheCreationInputTokens ?? 0;
+
+      return {
+        group_jid: params.groupJid,
+        session_id: params.sessionId ?? null,
+        model,
+        prompt_tokens: modelStats.inputTokens,
+        completion_tokens: modelStats.outputTokens,
+        total_tokens:
+          modelStats.inputTokens +
+          modelStats.outputTokens +
+          cacheReadTokens +
+          cacheWriteTokens,
+        cache_read_tokens: cacheReadTokens,
+        cache_write_tokens: cacheWriteTokens,
+        cost_usd: modelStats.costUSD,
+        latency_ms: latencyMs,
+        ts,
+      };
+    },
   );
-
-  if (!model) {
-    return null;
-  }
-
-  return {
-    group_jid: params.groupJid,
-    session_id: params.sessionId ?? null,
-    model,
-    prompt_tokens: promptTokens,
-    completion_tokens: completionTokens,
-    total_tokens: promptTokens + completionTokens,
-    cache_read_tokens: cacheReadTokens,
-    cache_write_tokens: cacheWriteTokens,
-    latency_ms: ts - params.queryStartedAt,
-    ts,
-  };
 }
 
 function getSessionSummary(
@@ -870,17 +863,17 @@ class ClaudeCodeQueryRunner<
       // ── Backward-compat: emit result for host message delivery ─
       if (message.type === 'result') {
         resultCount++;
-        const usageSummary = captureTokenUsageSummary({
+        const usageSummaries = captureTokenUsageSummaries({
           groupJid: containerInput.chatJid,
           sessionId: newSessionId ?? sessionId,
           currentModel,
           queryStartedAt,
           message,
         });
-        if (usageSummary) {
+        for (const usage of usageSummaries) {
           this.deps.writeOutput({
             type: 'token_usage',
-            usage: usageSummary,
+            usage,
           });
         }
 

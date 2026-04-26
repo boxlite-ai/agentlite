@@ -81,6 +81,7 @@ interface ContainerTokenUsageOutput {
     total_tokens: number;
     cache_read_tokens: number;
     cache_write_tokens: number;
+    cost_usd?: number | null;
     latency_ms: number;
     ts: number;
   };
@@ -118,7 +119,10 @@ function log(message: string): void {
   console.error(`[agent-runner] ${message}`);
 }
 
-export { resolveUsageModel } from './agent-backend.js';
+export {
+  captureTokenUsageSummaries,
+  resolveUsageModel,
+} from './agent-backend.js';
 
 async function main(): Promise<void> {
   let containerInput: ContainerInput;
