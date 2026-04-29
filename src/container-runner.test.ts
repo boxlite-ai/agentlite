@@ -30,6 +30,8 @@ vi.mock('fs', async () => {
       readFileSync: vi.fn(() => ''),
       readdirSync: vi.fn(() => []),
       statSync: vi.fn(() => ({ isDirectory: () => false })),
+      rmSync: vi.fn(),
+      symlinkSync: vi.fn(),
       copyFileSync: vi.fn(),
       cpSync: vi.fn(),
     },
@@ -232,6 +234,11 @@ describe('container-runner with BoxLite', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.clearAllMocks();
+    vi.mocked(fs.existsSync).mockImplementation(() => false);
+    vi.mocked(fs.readdirSync).mockImplementation(() => []);
+    vi.mocked(fs.statSync).mockImplementation(
+      () => ({ isDirectory: () => false }) as ReturnType<typeof fs.statSync>,
+    );
     mockExec = createMockExecution();
     mockSpawnBox.mockResolvedValue({
       box: mockBox,
@@ -667,6 +674,69 @@ describe('container-runner with BoxLite', () => {
           readonly: false,
         },
       ]),
+    );
+
+    await run.finish();
+  });
+
+  it('mounts custom MCP staging outside backend homes', async () => {
+    const run = await startContainerRun();
+
+    expect(run.mounts).toEqual(
+      expect.arrayContaining([
+        {
+          hostPath: '/tmp/agentlite-test/data/sessions/test-group/mcp',
+          containerPath: '/workspace/mcp',
+          readonly: false,
+        },
+      ]),
+    );
+
+    await run.finish();
+  });
+
+  it('mounts shared skills once and symlinks backend-native paths', async () => {
+    const run = await startContainerRun();
+
+    expect(run.mounts).toEqual(
+      expect.arrayContaining([
+        {
+          hostPath: '/tmp/agentlite-test/data/sessions/test-group/skills',
+          containerPath: '/workspace/skills',
+          readonly: false,
+        },
+      ]),
+    );
+    expect(run.mounts).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ containerPath: '/home/node/.claude/skills' }),
+        expect.objectContaining({ containerPath: '/home/node/.codex/skills' }),
+      ]),
+    );
+    expect(fs.symlinkSync).toHaveBeenCalledWith(
+      '/workspace/skills',
+      '/tmp/agentlite-test/data/sessions/test-group/.claude/skills',
+    );
+    expect(fs.symlinkSync).toHaveBeenCalledWith(
+      '/workspace/skills',
+      '/tmp/agentlite-test/data/sessions/test-group/.codex/skills',
+    );
+
+    await run.finish();
+  });
+
+  it('cleans shared skills staging before syncing', async () => {
+    vi.mocked(fs.existsSync).mockImplementation(
+      (filePath) =>
+        String(filePath) ===
+        '/tmp/agentlite-test/data/sessions/test-group/skills',
+    );
+
+    const run = await startContainerRun();
+
+    expect(fs.rmSync).toHaveBeenCalledWith(
+      '/tmp/agentlite-test/data/sessions/test-group/skills',
+      { recursive: true, force: true },
     );
 
     await run.finish();

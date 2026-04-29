@@ -146,10 +146,6 @@ const INSTRUCTION_FILE_NAMES = [
   PRIMARY_INSTRUCTION_FILE,
   COMPAT_INSTRUCTION_FILE,
 ] as const;
-const CODEX_INSTRUCTION_FILE_NAMES = [
-  COMPAT_INSTRUCTION_FILE,
-  PRIMARY_INSTRUCTION_FILE,
-] as const;
 
 /**
  * Push-based async iterable for streaming user messages to the SDK.
@@ -528,7 +524,7 @@ function buildCodexPrompt(
 ): string {
   const instructionContext = getInstructionContext(
     containerInput,
-    CODEX_INSTRUCTION_FILE_NAMES,
+    INSTRUCTION_FILE_NAMES,
   );
   const promptParts: string[] = [];
   if (instructionContext.agentInstructions) {
@@ -556,11 +552,11 @@ function buildCodexPrompt(
   }
 
   const memoryHints = [
-    'Conversation memory lives in `/workspace/group/AGENTS.md` (symlinked to `CLAUDE.md` when present).',
+    'Conversation memory lives in `/workspace/group/CLAUDE.md`. `/workspace/group/AGENTS.md` is a compatibility symlink when present.',
   ];
   if (instructionContext.hasGlobalMemory) {
     memoryHints.push(
-      'Shared read-only memory is also available at `/workspace/global/AGENTS.md`.',
+      'Shared read-only memory is also available at `/workspace/global/CLAUDE.md`.',
     );
   }
   promptParts.push(memoryHints.join('\n'));

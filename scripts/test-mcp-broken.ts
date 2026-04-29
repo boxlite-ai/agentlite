@@ -1,7 +1,7 @@
 #!/usr/bin/env npx tsx
 /**
  * Test: broken MCP .ts file does NOT block agent-runner startup.
- * MCP is at /home/node/.claude/mcp/ (separate from /app/src/).
+ * MCP is at /workspace/mcp/ (separate from /app/src/).
  */
 
 import fs from 'fs';
@@ -44,7 +44,7 @@ fs.writeFileSync(
     'echo "TSC_EXIT:$tsc_exit"',
     '',
     '# Step 2: try running the broken MCP directly',
-    'node --experimental-transform-types /home/node/.claude/mcp/bad/broken.ts 2>&1 || true',
+    'node --experimental-transform-types /workspace/mcp/bad/broken.ts 2>&1 || true',
     'echo "DONE"',
   ].join('\n'),
   { mode: 0o755 },
@@ -60,7 +60,7 @@ const box = await runtime.create(
       { hostPath: groupDir, guestPath: '/workspace/group', readOnly: false },
       {
         hostPath: path.join(testDir, 'mcp'),
-        guestPath: '/home/node/.claude/mcp',
+        guestPath: '/workspace/mcp',
         readOnly: false,
       },
       { hostPath: scriptDir, guestPath: '/workspace/test', readOnly: true },

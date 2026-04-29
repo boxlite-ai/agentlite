@@ -6,7 +6,7 @@ import type { AgentDb } from '../db.js';
 
 /* eslint-disable no-catch-all/no-catch-all -- Handoff generation must degrade to partial context. */
 
-const MEMORY_FILES = ['AGENTS.md', 'CLAUDE.md'] as const;
+const MEMORY_FILES = ['CLAUDE.md', 'AGENTS.md'] as const;
 const MAX_MEMORY_CHARS = 4000;
 const MAX_MESSAGE_CHARS = 500;
 
@@ -26,10 +26,14 @@ function truncate(value: string, maxChars: number): string {
 
 function readGroupMemory(groupDir: string): string {
   const parts: string[] = [];
+  const seenFiles = new Set<string>();
   for (const file of MEMORY_FILES) {
     const filePath = path.join(groupDir, file);
     if (!fs.existsSync(filePath)) continue;
     try {
+      const realPath = fs.realpathSync(filePath);
+      if (seenFiles.has(realPath)) continue;
+      seenFiles.add(realPath);
       const content = fs.readFileSync(filePath, 'utf-8').trim();
       if (content) {
         parts.push(`### ${file}\n${truncate(content, MAX_MEMORY_CHARS)}`);

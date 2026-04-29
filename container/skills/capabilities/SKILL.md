@@ -14,6 +14,7 @@ test -d /workspace/project && echo "MAIN" || echo "NOT_MAIN"
 ```
 
 If `NOT_MAIN`, respond with:
+
 > This command is available in your main chat only. Send `/capabilities` there to see what I can do.
 
 Then stop — do not generate the report.
@@ -27,23 +28,24 @@ Run these commands and compile the results into the report format below.
 List skill directories available to you:
 
 ```bash
-ls -1 /home/node/.claude/skills/ 2>/dev/null || echo "No skills found"
+ls -1 /workspace/skills/ 2>/dev/null || echo "No skills found"
 ```
 
 Each directory is an installed skill. The directory name is the skill name (e.g., `agent-browser` → `/agent-browser`).
 
 ### 2. Available tools
 
-Read the allowed tools from your SDK configuration. You always have access to:
-- **Core:** Bash, Read, Write, Edit, Glob, Grep
-- **Web:** WebSearch, WebFetch
-- **Orchestration:** Task, TaskOutput, TaskStop, TeamCreate, TeamDelete, SendMessage
-- **Other:** TodoWrite, ToolSearch, Skill, NotebookEdit
-- **MCP:** mcp__agentlite__* (messaging, tasks, group management)
+Tool names differ by backend. Report the tool families that are actually available in this session:
+
+- **Workspace:** shell commands, file reads/writes, search, and edits
+- **Web:** web/browser tools when installed by the active backend
+- **Orchestration:** delegation or task tools when available
+- **MCP:** `mcp__agentlite__*` (messaging, tasks, group management)
 
 ### 3. MCP server tools
 
 The AgentLite MCP server exposes these tools (via `mcp__agentlite__*` prefix):
+
 - `send_message` — send a message to the user/group immediately (optional `sender` for identity labeling)
 - `schedule_task` — schedule a recurring or one-time task (cron / interval / once; group or isolated context)
 - `list_tasks` — list scheduled tasks (main sees all, other groups see their own)
@@ -85,9 +87,9 @@ Present the report as a clean, readable message. Example:
 (list all found skills)
 
 *Tools:*
-• Core: Bash, Read, Write, Edit, Glob, Grep
-• Web: WebSearch, WebFetch
-• Orchestration: Task, TeamCreate, SendMessage
+• Workspace: shell, files, search, edits
+• Web: available/not installed
+• Orchestration: available/not installed
 • MCP: send_message, schedule_task, list_tasks, pause/resume/cancel/update_task, register_group, search_actions, call_action
 
 *Container Tools:*

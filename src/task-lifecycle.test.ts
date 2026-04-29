@@ -886,7 +886,7 @@ describe('task lifecycle integration', () => {
       expect(input.mcpServers).toEqual({
         demo: {
           command: 'node',
-          args: ['/home/node/.claude/mcp/demo/server.js'],
+          args: ['/workspace/mcp/demo/server.js'],
           env: undefined,
         },
       });

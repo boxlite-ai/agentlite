@@ -7,12 +7,17 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   COMPAT_INSTRUCTION_FILE,
   ensureInstructionAliases,
-  INSTRUCTION_FILES,
   PRIMARY_INSTRUCTION_FILE,
   writeInstructionFiles,
 } from './instruction-files.js';
 
 let tmpDir: string;
+
+function expectCompatSymlink(dir: string): void {
+  const compatPath = path.join(dir, COMPAT_INSTRUCTION_FILE);
+  expect(fs.lstatSync(compatPath).isSymbolicLink()).toBe(true);
+  expect(fs.readlinkSync(compatPath)).toBe(PRIMARY_INSTRUCTION_FILE);
+}
 
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentlite-instructions-'));
@@ -31,19 +36,22 @@ describe('writeInstructionFiles', () => {
     expect(fs.readFileSync(path.join(nested, 'CLAUDE.md'), 'utf-8')).toBe(
       'Nested instructions',
     );
+    expectCompatSymlink(nested);
   });
 
-  it('writes the primary instruction file and compat alias content', () => {
+  it('writes the primary instruction file and compat symlink', () => {
     writeInstructionFiles(tmpDir, 'Follow the instructions.');
 
-    for (const name of INSTRUCTION_FILES) {
-      expect(fs.readFileSync(path.join(tmpDir, name), 'utf-8')).toBe(
-        'Follow the instructions.',
-      );
-    }
+    expect(
+      fs.readFileSync(path.join(tmpDir, PRIMARY_INSTRUCTION_FILE), 'utf-8'),
+    ).toBe('Follow the instructions.');
+    expect(
+      fs.readFileSync(path.join(tmpDir, COMPAT_INSTRUCTION_FILE), 'utf-8'),
+    ).toBe('Follow the instructions.');
+    expectCompatSymlink(tmpDir);
   });
 
-  it('refreshes an existing compat file when instructions change', () => {
+  it('replaces an existing compat file when instructions change', () => {
     fs.writeFileSync(
       path.join(tmpDir, COMPAT_INSTRUCTION_FILE),
       'Old instructions',
@@ -51,11 +59,13 @@ describe('writeInstructionFiles', () => {
 
     writeInstructionFiles(tmpDir, 'New instructions');
 
-    for (const name of INSTRUCTION_FILES) {
-      expect(fs.readFileSync(path.join(tmpDir, name), 'utf-8')).toBe(
-        'New instructions',
-      );
-    }
+    expect(
+      fs.readFileSync(path.join(tmpDir, PRIMARY_INSTRUCTION_FILE), 'utf-8'),
+    ).toBe('New instructions');
+    expect(
+      fs.readFileSync(path.join(tmpDir, COMPAT_INSTRUCTION_FILE), 'utf-8'),
+    ).toBe('New instructions');
+    expectCompatSymlink(tmpDir);
   });
 });
 
@@ -68,9 +78,10 @@ describe('ensureInstructionAliases', () => {
     expect(
       fs.readFileSync(path.join(tmpDir, PRIMARY_INSTRUCTION_FILE), 'utf-8'),
     ).toBe('Compat');
+    expectCompatSymlink(tmpDir);
   });
 
-  it('backfills the compat instruction file from primary memory', () => {
+  it('backfills the compat instruction symlink from primary memory', () => {
     fs.writeFileSync(path.join(tmpDir, PRIMARY_INSTRUCTION_FILE), 'Primary');
 
     ensureInstructionAliases(tmpDir);
@@ -78,9 +89,10 @@ describe('ensureInstructionAliases', () => {
     expect(
       fs.readFileSync(path.join(tmpDir, COMPAT_INSTRUCTION_FILE), 'utf-8'),
     ).toBe('Primary');
+    expectCompatSymlink(tmpDir);
   });
 
-  it('does not overwrite an existing alias file', () => {
+  it('replaces an existing compat file with a symlink to primary', () => {
     fs.writeFileSync(path.join(tmpDir, PRIMARY_INSTRUCTION_FILE), 'Primary');
     fs.writeFileSync(path.join(tmpDir, COMPAT_INSTRUCTION_FILE), 'Compat');
 
@@ -91,15 +103,19 @@ describe('ensureInstructionAliases', () => {
     ).toBe('Primary');
     expect(
       fs.readFileSync(path.join(tmpDir, COMPAT_INSTRUCTION_FILE), 'utf-8'),
-    ).toBe('Compat');
+    ).toBe('Primary');
+    expectCompatSymlink(tmpDir);
   });
 
   it('does nothing when neither instruction file exists', () => {
     ensureInstructionAliases(tmpDir);
 
-    for (const name of INSTRUCTION_FILES) {
-      expect(fs.existsSync(path.join(tmpDir, name))).toBe(false);
-    }
+    expect(fs.existsSync(path.join(tmpDir, PRIMARY_INSTRUCTION_FILE))).toBe(
+      false,
+    );
+    expect(fs.existsSync(path.join(tmpDir, COMPAT_INSTRUCTION_FILE))).toBe(
+      false,
+    );
   });
 
   it('creates aliases readable through either instruction filename', () => {
@@ -110,10 +126,12 @@ describe('ensureInstructionAliases', () => {
 
     ensureInstructionAliases(tmpDir);
 
-    for (const name of INSTRUCTION_FILES) {
-      expect(fs.readFileSync(path.join(tmpDir, name), 'utf-8')).toBe(
-        'Shared instructions',
-      );
-    }
+    expect(
+      fs.readFileSync(path.join(tmpDir, PRIMARY_INSTRUCTION_FILE), 'utf-8'),
+    ).toBe('Shared instructions');
+    expect(
+      fs.readFileSync(path.join(tmpDir, COMPAT_INSTRUCTION_FILE), 'utf-8'),
+    ).toBe('Shared instructions');
+    expectCompatSymlink(tmpDir);
   });
 });

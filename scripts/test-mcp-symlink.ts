@@ -1,7 +1,7 @@
 #!/usr/bin/env npx tsx
 /**
  * Test: host-created dangling symlink to /app/node_modules resolves in container.
- * This verifies the final approach: MCP in .claude/mcp/ + host symlink.
+ * This verifies the final approach: MCP in /workspace/mcp/ + host symlink.
  */
 
 import fs from 'fs';
@@ -42,7 +42,7 @@ fs.writeFileSync(
   [
     '#!/bin/bash',
     'set -e',
-    'node --experimental-transform-types /home/node/.claude/mcp/myserver/server.ts',
+    'node --experimental-transform-types /workspace/mcp/myserver/server.ts',
   ].join('\n'),
   { mode: 0o755 },
 );
@@ -57,7 +57,7 @@ const box = await runtime.create(
       { hostPath: groupDir, guestPath: '/workspace/group', readOnly: false },
       {
         hostPath: path.join(testDir, 'mcp'),
-        guestPath: '/home/node/.claude/mcp',
+        guestPath: '/workspace/mcp',
         readOnly: false,
       },
       { hostPath: scriptDir, guestPath: '/workspace/test', readOnly: true },
@@ -117,7 +117,7 @@ try {
 
 if (stdout.includes('SYMLINK_OK:function:works')) {
   console.log(
-    'PASS: host symlink + .claude/mcp/ + --experimental-transform-types works',
+    'PASS: host symlink + /workspace/mcp/ + --experimental-transform-types works',
   );
 } else {
   console.log('FAIL');

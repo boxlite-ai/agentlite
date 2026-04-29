@@ -56,7 +56,10 @@ export const AGENT_BACKEND_HOME_SPECS: Record<
 
 export const AGENT_BACKEND_HOME_LIST = Object.values(AGENT_BACKEND_HOME_SPECS);
 
-export const CONTAINER_CUSTOM_MCP_DIR = `${AGENT_BACKEND_HOME_SPECS.claudeCode.containerHomePath}/mcp`;
+export const SHARED_SKILLS_DIR_NAME = 'skills';
+export const CONTAINER_SHARED_SKILLS_DIR = '/workspace/skills';
+export const CUSTOM_MCP_DIR_NAME = 'mcp';
+export const CONTAINER_CUSTOM_MCP_DIR = '/workspace/mcp';
 
 export function resolveAgentBackendHomeDir(
   backendRootDir: string,
@@ -66,4 +69,12 @@ export function resolveAgentBackendHomeDir(
     backendRootDir,
     AGENT_BACKEND_HOME_SPECS[backendType].homeDirName,
   );
+}
+
+export function resolveCustomMcpDir(backendRootDir: string): string {
+  return path.join(backendRootDir, CUSTOM_MCP_DIR_NAME);
+}
+
+export function resolveSharedSkillsDir(backendRootDir: string): string {
+  return path.join(backendRootDir, SHARED_SKILLS_DIR_NAME);
 }
