@@ -147,7 +147,10 @@ export class GroupManager {
     } catch {
       logger.warn('Corrupted last_agent_timestamp in DB, resetting');
     }
-    Object.assign(this.ctx.sessions, this.ctx.db.getAllSessions());
+    Object.assign(
+      this.ctx.sessions,
+      this.ctx.db.getAllSessions(this.ctx.config.backend.type),
+    );
     Object.assign(
       this.ctx.registeredGroups,
       this.ctx.db.getAllRegisteredGroups(),

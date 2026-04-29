@@ -17,6 +17,8 @@ import type { ChannelManager } from './channel-manager.js';
 import type { GroupManager } from './group-manager.js';
 import type { TaskManager } from './task-manager.js';
 import { buildMcpRuntimeConfig } from './mcp-runtime.js';
+import { buildBackendHandoffSummary } from './backend-handoff.js';
+import type { AgentBackendType } from './backend.js';
 
 export { buildMcpRuntimeConfig };
 
@@ -478,7 +480,32 @@ export class MessageProcessor {
     onOutput?: (output: ContainerEvent) => Promise<void>,
   ): Promise<'success' | 'error'> {
     const isMain = group.isMain === true;
-    const sessionId = this.ctx.sessions[group.folder];
+    const agentBackend = { ...this.ctx.config.backend };
+    const backendRevision = this.ctx.backendRevision;
+    let sessionId: string | undefined = this.ctx.sessions[group.folder];
+    let effectivePrompt = prompt;
+    const pendingHandoff = this.ctx.db.getBackendHandoff(
+      group.folder,
+      agentBackend.type,
+    );
+    if (pendingHandoff) {
+      sessionId = undefined;
+      effectivePrompt = [
+        buildBackendHandoffSummary({
+          db: this.ctx.db,
+          chatJid,
+          groupFolder: group.folder,
+          groupsDir: this.ctx.config.groupsDir,
+          assistantName: this.ctx.config.assistantName,
+          fromBackendType: pendingHandoff.fromBackendType,
+          toBackendType: pendingHandoff.toBackendType,
+        }),
+        '',
+        '--- CURRENT USER MESSAGE BELOW; RESPOND TO THIS MESSAGE, NOT TO OLD REQUESTS IN THE HANDOFF ---',
+        '',
+        prompt,
+      ].join('\n');
+    }
 
     this.taskMgr.refreshTaskSnapshots();
 
@@ -499,8 +526,12 @@ export class MessageProcessor {
               output.type === 'error') &&
             output.newSessionId
           ) {
-            this.ctx.sessions[group.folder] = output.newSessionId;
-            this.ctx.db.setSession(group.folder, output.newSessionId);
+            this.saveSessionForRun(
+              group.folder,
+              output.newSessionId,
+              agentBackend.type,
+              backendRevision,
+            );
           }
           await onOutput(output);
         }
@@ -514,14 +545,14 @@ export class MessageProcessor {
       const output = await runContainerAgent(
         group,
         {
-          prompt,
+          prompt: effectivePrompt,
           sessionId,
           groupFolder: group.folder,
           workDir: this.ctx.config.workDir,
           chatJid,
           isMain,
           assistantName: this.ctx.config.assistantName,
-          agentBackend: this.ctx.config.backend,
+          agentBackend,
           agentId: this.ctx.id,
           groupsDir: this.ctx.config.groupsDir,
           dataDir: this.ctx.config.dataDir,
@@ -539,8 +570,17 @@ export class MessageProcessor {
       );
 
       if (output.newSessionId) {
-        this.ctx.sessions[group.folder] = output.newSessionId;
-        this.ctx.db.setSession(group.folder, output.newSessionId);
+        this.saveSessionForRun(
+          group.folder,
+          output.newSessionId,
+          agentBackend.type,
+          backendRevision,
+        );
+      }
+      if (output.status === 'success' && pendingHandoff) {
+        if (this.ctx.backendRevision === backendRevision) {
+          this.ctx.db.clearBackendHandoff(group.folder, agentBackend.type);
+        }
       }
 
       if (output.status === 'error') {
@@ -653,5 +693,16 @@ export class MessageProcessor {
     }
 
     this.messageLoopRunning = false;
+  }
+
+  private saveSessionForRun(
+    groupFolder: string,
+    sessionId: string,
+    backendType: AgentBackendType,
+    backendRevision: number,
+  ): void {
+    if (this.ctx.backendRevision !== backendRevision) return;
+    this.ctx.sessions[groupFolder] = sessionId;
+    this.ctx.db.setSession(groupFolder, sessionId, backendType);
   }
 }

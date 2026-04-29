@@ -32,11 +32,27 @@ describe('public SDK type exports', () => {
     expectTypeOf<AgentBackendType>().toEqualTypeOf<'claudeCode' | 'codex'>();
     expectTypeOf<ClaudeCodeBackendOptions>().toEqualTypeOf<{
       type: 'claudeCode';
+      model?: string;
     }>();
-    expectTypeOf<CodexBackendOptions>().toEqualTypeOf<{ type: 'codex' }>();
+    expectTypeOf<CodexBackendOptions>().toEqualTypeOf<{
+      type: 'codex';
+      model?: string;
+    }>();
     expectTypeOf<AgentBackendOptions>().toEqualTypeOf<
       ClaudeCodeBackendOptions | CodexBackendOptions
     >();
+  });
+
+  it('exposes dynamic backend APIs', () => {
+    expectTypeOf<
+      ReturnType<Agent['getBackend']>
+    >().toEqualTypeOf<AgentBackendOptions>();
+    expectTypeOf<Agent['setBackend']>()
+      .parameter(0)
+      .toEqualTypeOf<AgentBackendOptions>();
+    expectTypeOf<Agent['setBackend']>()
+      .parameter(1)
+      .toEqualTypeOf<{ context?: 'handoff' | 'fresh' } | undefined>();
   });
 
   it('exposes task APIs with public task types', () => {

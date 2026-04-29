@@ -32,6 +32,7 @@ export interface AgentContext {
   readonly sessions: Record<string, string>;
   readonly registeredGroups: Record<string, InternalRegisteredGroup>;
   readonly lastAgentTimestamp: Record<string, string>;
+  readonly backendRevision: number;
   lastTimestamp: string;
 
   // ─── Channels ───────────────────────────────────────────────────

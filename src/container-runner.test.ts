@@ -640,10 +640,13 @@ describe('container-runner with BoxLite', () => {
   it('serializes agentBackend into the stdin JSON payload', async () => {
     const run = await startContainerRun({
       ...testInput,
-      agentBackend: { type: 'codex' },
+      agentBackend: { type: 'codex', model: 'gpt-5.4' },
     });
 
-    expect(run.parsedInput.agentBackend).toEqual({ type: 'codex' });
+    expect(run.parsedInput.agentBackend).toEqual({
+      type: 'codex',
+      model: 'gpt-5.4',
+    });
 
     await run.finish();
   });

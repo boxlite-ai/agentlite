@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
+import Database from 'better-sqlite3';
 
-import { _initTestDatabase, AgentDb } from './db.js';
+import { _initTestDatabase, AgentDb, createSchema } from './db.js';
 import { NewMessage } from './types.js';
 
 let db: AgentDb;
@@ -285,6 +286,75 @@ describe('getNewMessages', () => {
     const { messages, newTimestamp } = db.getNewMessages([], '', 'Andy');
     expect(messages).toHaveLength(0);
     expect(newTimestamp).toBe('');
+  });
+});
+
+describe('backend-scoped sessions', () => {
+  it('stores separate session ids per backend for the same group', () => {
+    db.setSession('main', 'claude-session', 'claudeCode');
+    db.setSession('main', 'codex-thread', 'codex');
+
+    expect(db.getSession('main', 'claudeCode')).toBe('claude-session');
+    expect(db.getSession('main', 'codex')).toBe('codex-thread');
+    expect(db.getAllSessions('claudeCode')).toEqual({
+      main: 'claude-session',
+    });
+    expect(db.getAllSessions('codex')).toEqual({ main: 'codex-thread' });
+  });
+
+  it('migrates legacy group-only sessions to the current backend', () => {
+    const raw = new Database(':memory:');
+    raw.exec(`
+      CREATE TABLE sessions (
+        group_folder TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL
+      );
+      INSERT INTO sessions (group_folder, session_id)
+      VALUES ('main', 'legacy-session');
+    `);
+
+    createSchema(raw, 'Andy', 'codex');
+
+    const row = raw
+      .prepare(
+        'SELECT group_folder, backend_type, session_id FROM sessions WHERE group_folder = ?',
+      )
+      .get('main') as
+      | { group_folder: string; backend_type: string; session_id: string }
+      | undefined;
+
+    expect(row).toEqual({
+      group_folder: 'main',
+      backend_type: 'codex',
+      session_id: 'legacy-session',
+    });
+    raw.close();
+  });
+
+  it('can clear sessions for one backend without affecting another', () => {
+    db.setSession('main', 'claude-session', 'claudeCode');
+    db.setSession('main', 'codex-thread', 'codex');
+
+    db.deleteSessionsForBackend(['main'], 'codex');
+
+    expect(db.getSession('main', 'claudeCode')).toBe('claude-session');
+    expect(db.getSession('main', 'codex')).toBeUndefined();
+  });
+});
+
+describe('backend handoffs', () => {
+  it('stores, reads, and clears pending backend handoffs', () => {
+    db.setBackendHandoffs(['main'], 'claudeCode', 'codex');
+
+    expect(db.getBackendHandoff('main', 'codex')).toMatchObject({
+      groupFolder: 'main',
+      fromBackendType: 'claudeCode',
+      toBackendType: 'codex',
+    });
+
+    db.clearBackendHandoff('main', 'codex');
+
+    expect(db.getBackendHandoff('main', 'codex')).toBeUndefined();
   });
 });
 

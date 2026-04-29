@@ -26,6 +26,18 @@ describe('normalizeAgentBackendOptions', () => {
     }
   });
 
+  it('accepts optional model overrides', () => {
+    expect(
+      normalizeAgentBackendOptions({
+        type: 'claudeCode',
+        model: ' claude-opus-4-6 ',
+      }),
+    ).toEqual({ type: 'claudeCode', model: 'claude-opus-4-6' });
+    expect(
+      normalizeAgentBackendOptions({ type: 'codex', model: 'gpt-5.4' }),
+    ).toEqual({ type: 'codex', model: 'gpt-5.4' });
+  });
+
   it('returns a canonical shape without passthrough fields', () => {
     const normalized = normalizeAgentBackendOptions({
       type: 'codex',
@@ -33,6 +45,12 @@ describe('normalizeAgentBackendOptions', () => {
     });
 
     expect(normalized).toEqual({ type: 'codex' });
+  });
+
+  it('drops blank model overrides', () => {
+    expect(
+      normalizeAgentBackendOptions({ type: 'codex', model: '  ' }),
+    ).toEqual({ type: 'codex' });
   });
 
   it.each([

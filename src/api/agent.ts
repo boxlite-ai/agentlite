@@ -12,7 +12,7 @@ import type {
 import type { ZodRawShape } from 'zod';
 
 import type { ActionCallback } from './action.js';
-import type { McpServerConfig } from './options.js';
+import type { AgentBackendOptions, McpServerConfig } from './options.js';
 import type {
   ListTasksOptions,
   ScheduleTaskOptions,
@@ -68,6 +68,24 @@ export interface Agent {
 
   /** Send a message to a registered chat via the appropriate channel. */
   sendMessage(jid: string, text: string): Promise<void>;
+
+  // ─── Backend ───────────────────────────────────────────────────
+
+  /** Snapshot of the configured in-container backend and optional model. */
+  getBackend(): AgentBackendOptions;
+  /**
+   * Change the default backend/model for future turns. Active containers are
+   * recycled after the current turn; the new backend applies on the next turn.
+   */
+  setBackend(
+    backend: AgentBackendOptions,
+    options?: { context?: 'handoff' | 'fresh' },
+  ): Promise<{
+    previous: AgentBackendOptions;
+    current: AgentBackendOptions;
+    applies: 'nextTurn';
+    handoff: 'notNeeded' | 'pending' | 'skipped';
+  }>;
 
   // ─── Scheduled tasks ───────────────────────────────────────
 

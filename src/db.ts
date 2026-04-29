@@ -4,6 +4,7 @@ import path from 'path';
 
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
+import { isAgentBackendType, type AgentBackendType } from './agent/backend.js';
 import {
   NewMessage,
   RegisteredGroup,
@@ -14,6 +15,7 @@ import {
 export function createSchema(
   database: Database.Database,
   assistantName?: string,
+  currentBackendType: AgentBackendType = 'claudeCode',
 ): void {
   database.exec(`
     CREATE TABLE IF NOT EXISTS chats (
@@ -70,8 +72,16 @@ export function createSchema(
       value TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS sessions (
+      group_folder TEXT NOT NULL,
+      backend_type TEXT NOT NULL DEFAULT 'claudeCode',
+      session_id TEXT NOT NULL,
+      PRIMARY KEY (group_folder, backend_type)
+    );
+    CREATE TABLE IF NOT EXISTS backend_handoffs (
       group_folder TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL
+      from_backend_type TEXT NOT NULL,
+      to_backend_type TEXT NOT NULL,
+      created_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS registered_groups (
       jid TEXT PRIMARY KEY,
@@ -110,6 +120,8 @@ export function createSchema(
     );
 
   `);
+
+  migrateSessionsSchema(database, currentBackendType);
 
   // Add context_mode column if it doesn't exist (migration for existing DBs)
   try {
@@ -175,18 +187,84 @@ export function createSchema(
   `);
 }
 
+function migrateSessionsSchema(
+  database: Database.Database,
+  currentBackendType: AgentBackendType,
+): void {
+  const cols = database.prepare(`PRAGMA table_info(sessions)`).all() as {
+    name: string;
+    pk: number;
+  }[];
+  const hasBackendType = cols.some((c) => c.name === 'backend_type');
+  const pkCols = cols
+    .filter((c) => c.pk > 0)
+    .sort((a, b) => a.pk - b.pk)
+    .map((c) => c.name);
+  const hasCompositePk =
+    pkCols.length === 2 &&
+    pkCols[0] === 'group_folder' &&
+    pkCols[1] === 'backend_type';
+
+  if (hasBackendType && hasCompositePk) return;
+
+  const backendType = isAgentBackendType(currentBackendType)
+    ? currentBackendType
+    : 'claudeCode';
+
+  database.exec(`
+    DROP TABLE IF EXISTS sessions_legacy;
+    ALTER TABLE sessions RENAME TO sessions_legacy;
+    CREATE TABLE sessions (
+      group_folder TEXT NOT NULL,
+      backend_type TEXT NOT NULL DEFAULT 'claudeCode',
+      session_id TEXT NOT NULL,
+      PRIMARY KEY (group_folder, backend_type)
+    );
+  `);
+
+  if (hasBackendType) {
+    database
+      .prepare(
+        `
+        INSERT OR REPLACE INTO sessions (group_folder, backend_type, session_id)
+        SELECT group_folder, backend_type, session_id
+        FROM sessions_legacy
+      `,
+      )
+      .run();
+  } else {
+    database
+      .prepare(
+        `
+        INSERT OR REPLACE INTO sessions (group_folder, backend_type, session_id)
+        SELECT group_folder, ?, session_id
+        FROM sessions_legacy
+      `,
+      )
+      .run(backendType);
+  }
+
+  database.exec(`DROP TABLE sessions_legacy`);
+}
+
 export function initDatabase(opts: {
   storeDir: string;
   dataDir: string;
   assistantName: string;
+  currentBackendType?: AgentBackendType;
 }): AgentDb {
   const dbPath = path.join(opts.storeDir, 'messages.db');
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 
   const database = new Database(dbPath);
-  createSchema(database, opts.assistantName);
+  createSchema(database, opts.assistantName, opts.currentBackendType);
 
-  const agentDb = new AgentDb(database, opts.assistantName, opts.dataDir);
+  const agentDb = new AgentDb(
+    database,
+    opts.assistantName,
+    opts.dataDir,
+    opts.currentBackendType ?? 'claudeCode',
+  );
   agentDb.migrateJsonState();
   return agentDb;
 }
@@ -196,7 +274,7 @@ export function _initTestDatabase(assistantName?: string): AgentDb {
   const name = assistantName ?? 'TestBot';
   const database = new Database(':memory:');
   createSchema(database, name);
-  return new AgentDb(database, name, '');
+  return new AgentDb(database, name, '', 'claudeCode');
 }
 
 export interface ChatInfo {
@@ -212,6 +290,7 @@ export class AgentDb {
     private db: Database.Database,
     private assistantName: string,
     private dataDir: string,
+    private currentBackendType: AgentBackendType,
   ) {}
 
   close(): void {
@@ -403,6 +482,27 @@ export class AgentDb {
       .all(chatJid, sinceTimestamp, `${botPrefix}:%`, limit) as NewMessage[];
   }
 
+  getRecentMessages(
+    chatJid: string,
+    botPrefix: string,
+    limit: number = 20,
+  ): NewMessage[] {
+    const sql = `
+    SELECT * FROM (
+      SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me
+      FROM messages
+      WHERE chat_jid = ?
+        AND is_bot_message = 0 AND content NOT LIKE ?
+        AND content != '' AND content IS NOT NULL
+      ORDER BY timestamp DESC
+      LIMIT ?
+    ) ORDER BY timestamp
+  `;
+    return this.db
+      .prepare(sql)
+      .all(chatJid, `${botPrefix}:%`, limit) as NewMessage[];
+  }
+
   // --- Tasks ---
 
   createTask(task: Omit<ScheduledTask, 'last_run' | 'last_result'>): void {
@@ -571,30 +671,135 @@ export class AgentDb {
 
   // --- Sessions ---
 
-  getSession(groupFolder: string): string | undefined {
+  getSession(
+    groupFolder: string,
+    backendType: AgentBackendType = 'claudeCode',
+  ): string | undefined {
     const row = this.db
-      .prepare('SELECT session_id FROM sessions WHERE group_folder = ?')
-      .get(groupFolder) as { session_id: string } | undefined;
+      .prepare(
+        'SELECT session_id FROM sessions WHERE group_folder = ? AND backend_type = ?',
+      )
+      .get(groupFolder, backendType) as { session_id: string } | undefined;
     return row?.session_id;
   }
 
-  setSession(groupFolder: string, sessionId: string): void {
+  setSession(
+    groupFolder: string,
+    sessionId: string,
+    backendType: AgentBackendType = 'claudeCode',
+  ): void {
     this.db
       .prepare(
-        'INSERT OR REPLACE INTO sessions (group_folder, session_id) VALUES (?, ?)',
+        'INSERT OR REPLACE INTO sessions (group_folder, backend_type, session_id) VALUES (?, ?, ?)',
       )
-      .run(groupFolder, sessionId);
+      .run(groupFolder, backendType, sessionId);
   }
 
-  getAllSessions(): Record<string, string> {
+  getAllSessions(
+    backendType: AgentBackendType = 'claudeCode',
+  ): Record<string, string> {
     const rows = this.db
-      .prepare('SELECT group_folder, session_id FROM sessions')
-      .all() as Array<{ group_folder: string; session_id: string }>;
+      .prepare(
+        'SELECT group_folder, session_id FROM sessions WHERE backend_type = ?',
+      )
+      .all(backendType) as Array<{ group_folder: string; session_id: string }>;
     const result: Record<string, string> = {};
     for (const row of rows) {
       result[row.group_folder] = row.session_id;
     }
     return result;
+  }
+
+  deleteSessionsForBackend(
+    groupFolders: string[],
+    backendType: AgentBackendType,
+  ): void {
+    if (groupFolders.length === 0) return;
+    const stmt = this.db.prepare(
+      'DELETE FROM sessions WHERE group_folder = ? AND backend_type = ?',
+    );
+    const tx = this.db.transaction((folders: string[]) => {
+      for (const folder of folders) stmt.run(folder, backendType);
+    });
+    tx(groupFolders);
+  }
+
+  setBackendHandoffs(
+    groupFolders: string[],
+    fromBackendType: AgentBackendType,
+    toBackendType: AgentBackendType,
+  ): void {
+    if (groupFolders.length === 0) return;
+    const now = new Date().toISOString();
+    const stmt = this.db.prepare(
+      `
+      INSERT OR REPLACE INTO backend_handoffs (
+        group_folder,
+        from_backend_type,
+        to_backend_type,
+        created_at
+      ) VALUES (?, ?, ?, ?)
+    `,
+    );
+    const tx = this.db.transaction((folders: string[]) => {
+      for (const folder of folders) {
+        stmt.run(folder, fromBackendType, toBackendType, now);
+      }
+    });
+    tx(groupFolders);
+  }
+
+  getBackendHandoff(
+    groupFolder: string,
+    toBackendType: AgentBackendType,
+  ):
+    | {
+        groupFolder: string;
+        fromBackendType: AgentBackendType;
+        toBackendType: AgentBackendType;
+        createdAt: string;
+      }
+    | undefined {
+    const row = this.db
+      .prepare(
+        `
+        SELECT group_folder, from_backend_type, to_backend_type, created_at
+        FROM backend_handoffs
+        WHERE group_folder = ? AND to_backend_type = ?
+      `,
+      )
+      .get(groupFolder, toBackendType) as
+      | {
+          group_folder: string;
+          from_backend_type: string;
+          to_backend_type: string;
+          created_at: string;
+        }
+      | undefined;
+    if (
+      !row ||
+      !isAgentBackendType(row.from_backend_type) ||
+      !isAgentBackendType(row.to_backend_type)
+    ) {
+      return undefined;
+    }
+    return {
+      groupFolder: row.group_folder,
+      fromBackendType: row.from_backend_type,
+      toBackendType: row.to_backend_type,
+      createdAt: row.created_at,
+    };
+  }
+
+  clearBackendHandoff(
+    groupFolder: string,
+    toBackendType: AgentBackendType,
+  ): void {
+    this.db
+      .prepare(
+        'DELETE FROM backend_handoffs WHERE group_folder = ? AND to_backend_type = ?',
+      )
+      .run(groupFolder, toBackendType);
   }
 
   // --- Registered groups ---
@@ -739,7 +944,7 @@ export class AgentDb {
     > | null;
     if (sessions) {
       for (const [folder, sessionId] of Object.entries(sessions)) {
-        this.setSession(folder, sessionId);
+        this.setSession(folder, sessionId, this.currentBackendType);
       }
     }
 

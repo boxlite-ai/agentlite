@@ -11,7 +11,7 @@ import { telegram } from '@boxlite-ai/agentlite/channels/telegram';
 const agentlite = await createAgentLite({ workdir: './data' });
 const agent = agentlite.getOrCreateAgent('main', {
   name: 'Andy',
-  backend: { type: 'claudeCode' }, // default; use { type: 'codex' } for OpenAI Codex CLI
+  backend: { type: 'claudeCode', model: 'claude-sonnet-4-6' }, // default backend; use { type: 'codex', model: 'gpt-5.4' } for OpenAI Codex CLI
 });
 agent.addChannel(
   'telegram',
@@ -122,14 +122,28 @@ const claudeAgent = agentlite.getOrCreateAgent('claude-main', {
 
 const codexAgent = agentlite.getOrCreateAgent('codex-main', {
   name: 'Casey',
-  backend: { type: 'codex' },
+  backend: { type: 'codex', model: 'gpt-5.4' },
   credentials: async () => ({
     OPENAI_API_KEY: process.env.OPENAI_API_KEY!,
   }),
 });
 ```
 
-Claude remains the default when `runtime` is omitted.
+Claude Code remains the default when `backend` is omitted.
+
+You can also change the default backend or model at runtime. Changes apply on
+the next turn; active containers finish their current response and are recycled:
+
+```typescript
+await agent.setBackend(
+  { type: 'codex', model: 'gpt-5.4' },
+  { context: 'handoff' },
+);
+```
+
+Backend switches start a fresh backend-native session and carry group continuity
+through mounted memory files plus a compact handoff block. Omit `model` to clear
+the override and return to the backend's native default.
 
 **Can I use third-party or open-source models?**
 
