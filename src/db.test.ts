@@ -218,6 +218,67 @@ describe('getMessagesSince', () => {
   });
 });
 
+describe('getRecentMessages', () => {
+  it('returns the newest user messages in chronological order and filters bot backfills', () => {
+    db.storeChatMetadata('group@g.us', '2024-01-01T00:00:00.000Z');
+    db.storeChatMetadata('other@g.us', '2024-01-01T00:00:00.000Z');
+
+    store({
+      id: 'm1',
+      chat_jid: 'group@g.us',
+      sender: 'alice',
+      sender_name: 'Alice',
+      content: 'first',
+      timestamp: '2024-01-01T00:00:01.000Z',
+    });
+    db.storeMessage({
+      id: 'bot-flag',
+      chat_jid: 'group@g.us',
+      sender: 'bot',
+      sender_name: 'Andy',
+      content: 'bot by flag',
+      timestamp: '2024-01-01T00:00:02.000Z',
+      is_bot_message: true,
+    });
+    store({
+      id: 'bot-prefix',
+      chat_jid: 'group@g.us',
+      sender: 'bot',
+      sender_name: 'Andy',
+      content: 'Andy: bot by prefix',
+      timestamp: '2024-01-01T00:00:03.000Z',
+    });
+    store({
+      id: 'm2',
+      chat_jid: 'group@g.us',
+      sender: 'bob',
+      sender_name: 'Bob',
+      content: 'second',
+      timestamp: '2024-01-01T00:00:04.000Z',
+    });
+    store({
+      id: 'm3',
+      chat_jid: 'group@g.us',
+      sender: 'carol',
+      sender_name: 'Carol',
+      content: 'third',
+      timestamp: '2024-01-01T00:00:05.000Z',
+    });
+    store({
+      id: 'other',
+      chat_jid: 'other@g.us',
+      sender: 'mallory',
+      sender_name: 'Mallory',
+      content: 'wrong chat',
+      timestamp: '2024-01-01T00:00:06.000Z',
+    });
+
+    const messages = db.getRecentMessages('group@g.us', 'Andy', 2);
+
+    expect(messages.map((m) => m.id)).toEqual(['m2', 'm3']);
+  });
+});
+
 // --- getNewMessages ---
 
 describe('getNewMessages', () => {
@@ -355,6 +416,25 @@ describe('backend handoffs', () => {
     db.clearBackendHandoff('main', 'codex');
 
     expect(db.getBackendHandoff('main', 'codex')).toBeUndefined();
+  });
+
+  it('scopes pending handoffs by destination backend across groups', () => {
+    db.setBackendHandoffs(['main', 'team'], 'claudeCode', 'codex');
+    db.setBackendHandoffs(['ops'], 'codex', 'claudeCode');
+
+    expect(db.getBackendHandoff('main', 'claudeCode')).toBeUndefined();
+    expect(db.getBackendHandoff('main', 'codex')).toMatchObject({
+      groupFolder: 'main',
+      fromBackendType: 'claudeCode',
+      toBackendType: 'codex',
+    });
+    expect(db.getBackendHandoff('team', 'codex')).toMatchObject({
+      groupFolder: 'team',
+    });
+    expect(db.getBackendHandoff('ops', 'claudeCode')).toMatchObject({
+      fromBackendType: 'codex',
+      toBackendType: 'claudeCode',
+    });
   });
 });
 

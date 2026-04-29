@@ -2,6 +2,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
+import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../box-runtime.js', () => ({
@@ -103,6 +104,67 @@ describe('AgentLite platform registry', () => {
     );
     expect(restored.config.mountAllowlist).toEqual(allowlist);
     expect((restored as unknown as { _started: boolean })._started).toBe(false);
+  });
+
+  it('migrates registry rows created before backend_model existed', async () => {
+    const registryPath = getAgentRegistryDbPath(tmpDir);
+    fs.mkdirSync(path.dirname(registryPath), { recursive: true });
+    const raw = new Database(registryPath);
+    raw.exec(`
+      CREATE TABLE agents (
+        name TEXT PRIMARY KEY,
+        agent_id TEXT NOT NULL UNIQUE,
+        workdir TEXT NOT NULL,
+        assistant_name TEXT NOT NULL,
+        backend_type TEXT NOT NULL DEFAULT 'claudeCode',
+        mount_allowlist_json TEXT,
+        instructions TEXT,
+        skills_sources_json TEXT,
+        mcp_servers_json TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO agents (
+        name,
+        agent_id,
+        workdir,
+        assistant_name,
+        backend_type,
+        mount_allowlist_json,
+        instructions,
+        skills_sources_json,
+        mcp_servers_json,
+        created_at,
+        updated_at
+      ) VALUES (
+        'legacy',
+        'legacy01',
+        '${path.join(tmpDir, 'legacy-agent').replaceAll("'", "''")}',
+        'Legacy',
+        'codex',
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        '2026-01-01T00:00:00.000Z',
+        '2026-01-01T00:00:00.000Z'
+      );
+    `);
+    raw.close();
+
+    const platform = await createAgentLiteImpl({ workdir: tmpDir });
+    platforms.push(platform);
+
+    const restored = platform.agents.get('legacy') as AgentImpl | undefined;
+    expect(restored).toBeDefined();
+    expect(restored!.getBackend()).toEqual({ type: 'codex' });
+
+    const registry = initAgentRegistryDb(tmpDir);
+    try {
+      expect(registry.getAgent('legacy')!.backend).toEqual({ type: 'codex' });
+    } finally {
+      registry.close();
+    }
   });
 
   it('getOrCreateAgent merges runtime-only options and rejects conflicting serializable options', async () => {
@@ -244,6 +306,154 @@ describe('AgentLite platform registry', () => {
     expect(result.handoff).toBe('notNeeded');
     expect(agent.db.getBackendHandoff('main', 'claudeCode')).toBeUndefined();
     expect(agent.backendRevision).toBe(0);
+  });
+
+  it('same-backend model changes can clear overrides without replacing the native session', async () => {
+    const platform = await createAgentLiteImpl({ workdir: tmpDir });
+    platforms.push(platform);
+
+    const agent = platform.createAgent('alice', {
+      backend: { type: 'codex', model: 'gpt-5.4' },
+    }) as AgentImpl;
+    agent.db = _initTestDatabase();
+    agent.registeredGroups['self-chat'] = {
+      name: 'Main',
+      folder: 'main',
+      trigger: 'always',
+      added_at: new Date().toISOString(),
+      isMain: true,
+    };
+    agent.sessions.main = 'codex-thread';
+    agent.db.setSession('main', 'codex-thread', 'codex');
+    const closeSpy = vi.spyOn(agent.queue, 'closeStdin');
+    (agent as unknown as { _started: boolean })._started = true;
+
+    const result = await agent.setBackend({ type: 'codex' });
+
+    expect(result).toMatchObject({
+      previous: { type: 'codex', model: 'gpt-5.4' },
+      current: { type: 'codex' },
+      applies: 'nextTurn',
+      handoff: 'notNeeded',
+    });
+    expect(agent.getBackend()).toEqual({ type: 'codex' });
+    expect(agent.sessions.main).toBe('codex-thread');
+    expect(agent.db.getSession('main', 'codex')).toBe('codex-thread');
+    expect(agent.backendRevision).toBe(0);
+    expect(closeSpy).toHaveBeenCalledWith('self-chat');
+
+    const registry = initAgentRegistryDb(tmpDir);
+    try {
+      expect(registry.getAgent('alice')!.backend).toEqual({ type: 'codex' });
+    } finally {
+      registry.close();
+    }
+  });
+
+  it('backend switches can request fresh context without creating handoff state', async () => {
+    const platform = await createAgentLiteImpl({ workdir: tmpDir });
+    platforms.push(platform);
+
+    const agent = platform.createAgent('alice') as AgentImpl;
+    agent.db = _initTestDatabase();
+    agent.registeredGroups['self-chat'] = {
+      name: 'Main',
+      folder: 'main',
+      trigger: 'always',
+      added_at: new Date().toISOString(),
+      isMain: true,
+    };
+    agent.sessions.main = 'claude-session';
+    agent.db.setSession('main', 'claude-session', 'claudeCode');
+    agent.db.setSession('main', 'stale-codex-thread', 'codex');
+    (agent as unknown as { _started: boolean })._started = true;
+
+    const result = await agent.setBackend(
+      { type: 'codex' },
+      { context: 'fresh' },
+    );
+
+    expect(result.handoff).toBe('skipped');
+    expect(agent.getBackend()).toEqual({ type: 'codex' });
+    expect(agent.sessions.main).toBeUndefined();
+    expect(agent.db.getSession('main', 'claudeCode')).toBe('claude-session');
+    expect(agent.db.getSession('main', 'codex')).toBeUndefined();
+    expect(agent.db.getBackendHandoff('main', 'codex')).toBeUndefined();
+    expect(agent.backendRevision).toBe(1);
+  });
+
+  it.each([
+    {
+      label: 'before start',
+      started: false,
+      groups: {
+        'self-chat': {
+          name: 'Main',
+          folder: 'main',
+          trigger: 'always',
+          added_at: '2026-01-01T00:00:00.000Z',
+          isMain: true,
+        },
+      },
+    },
+    {
+      label: 'with no registered groups',
+      started: true,
+      groups: {},
+    },
+  ])('backend switches skip handoff $label', async ({ started, groups }) => {
+    const platform = await createAgentLiteImpl({ workdir: tmpDir });
+    platforms.push(platform);
+
+    const agent = platform.createAgent('alice') as AgentImpl;
+    agent.db = _initTestDatabase();
+    agent.registeredGroups = groups;
+    const closeSpy = vi.spyOn(agent.queue, 'closeStdin');
+    (agent as unknown as { _started: boolean })._started = started;
+
+    const result = await agent.setBackend({ type: 'codex' });
+
+    expect(result).toMatchObject({
+      previous: { type: 'claudeCode' },
+      current: { type: 'codex' },
+      applies: 'nextTurn',
+      handoff: 'skipped',
+    });
+    expect(agent.getBackend()).toEqual({ type: 'codex' });
+    expect(agent.backendRevision).toBe(1);
+    expect(closeSpy).not.toHaveBeenCalled();
+  });
+
+  it('rejects invalid backend updates without mutating the current backend', async () => {
+    const platform = await createAgentLiteImpl({ workdir: tmpDir });
+    platforms.push(platform);
+
+    const agent = platform.createAgent('alice', {
+      backend: { type: 'claudeCode', model: 'claude-sonnet-4-6' },
+    }) as AgentImpl;
+    const closeSpy = vi.spyOn(agent.queue, 'closeStdin');
+    (agent as unknown as { _started: boolean })._started = true;
+
+    await expect(
+      agent.setBackend({ type: 'unknown' } as never),
+    ).rejects.toThrow('Invalid agent backend');
+
+    expect(agent.getBackend()).toEqual({
+      type: 'claudeCode',
+      model: 'claude-sonnet-4-6',
+    });
+    expect(agent.backendRevision).toBe(0);
+    expect(closeSpy).not.toHaveBeenCalled();
+
+    const registry = initAgentRegistryDb(tmpDir);
+    try {
+      expect(registry.getAgent('alice')!.backend).toEqual({
+        type: 'claudeCode',
+        model: 'claude-sonnet-4-6',
+      });
+    } finally {
+      registry.close();
+    }
   });
 
   it('setBackend no-ops when backend and model are unchanged', async () => {

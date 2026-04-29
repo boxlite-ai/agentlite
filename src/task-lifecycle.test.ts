@@ -98,13 +98,18 @@ function immediateQueue() {
 function startScheduler(
   agent: AgentImpl,
   queue: ReturnType<typeof immediateQueue>,
-  opts?: { registeredGroups?: Record<string, RegisteredGroup> },
+  opts?: {
+    registeredGroups?: Record<string, RegisteredGroup>;
+    sessions?: Record<string, string>;
+  },
 ): { stop(): void } {
   return startSchedulerLoop({
     db,
     agentId: agent.id,
     assistantName: 'Andy',
     agentBackend: agent.config.backend,
+    getAgentBackend: () => agent.config.backend,
+    getBackendRevision: () => agent.backendRevision,
     schedulerPollInterval: 60000,
     timezone: 'UTC',
     workDir: agent.config.workDir,
@@ -116,7 +121,7 @@ function startScheduler(
         'main@g.us': MAIN_GROUP,
         'team@g.us': TEAM_GROUP,
       },
-    getSessions: () => ({}),
+    getSessions: () => opts?.sessions ?? agent.sessions,
     actionsHttp: agent.actionsHttp,
     getMcpServers: () => agent.config.mcpServers,
     queue: queue as unknown as import('./group-queue.js').GroupQueue,
@@ -343,6 +348,119 @@ describe('task lifecycle integration', () => {
     } finally {
       handle.stop();
     }
+  });
+
+  it('applies pending backend handoff to the first group-context scheduled task', async () => {
+    const agent = createAgent('handoff-task', {
+      backend: { type: 'codex', model: 'gpt-5.4' },
+    });
+    agent._setDbForTests(db);
+    agent._setRegisteredGroups({
+      'main@g.us': MAIN_GROUP,
+      'team@g.us': TEAM_GROUP,
+    });
+    (agent as unknown as { _started: boolean })._started = true;
+    agent.sessions.team = 'stale-codex-thread';
+    fs.mkdirSync(path.join(agent.config.groupsDir, 'team'), {
+      recursive: true,
+    });
+    fs.writeFileSync(
+      path.join(agent.config.groupsDir, 'team', 'AGENTS.md'),
+      '# Team\nPrefer compact task handoffs.\n',
+    );
+    db.storeChatMetadata('team@g.us', '2026-01-01T00:00:00.000Z', 'Team');
+    db.storeMessage({
+      id: 'm1',
+      chat_jid: 'team@g.us',
+      sender: 'user@s.whatsapp.net',
+      sender_name: 'User',
+      content: 'previous team context',
+      timestamp: '2026-01-01T00:00:01.000Z',
+      is_from_me: false,
+    });
+    db.setBackendHandoffs(['team'], 'claudeCode', 'codex');
+
+    vi.mocked(runContainerAgent).mockResolvedValue({
+      status: 'success',
+      result: 'scheduled done',
+      newSessionId: 'new-codex-task-thread',
+    });
+
+    const task = await agent.scheduleTask({
+      jid: 'team@g.us',
+      prompt: 'finish scheduled backend switch',
+      scheduleType: 'once',
+      scheduleValue: '2024-01-01T00:00:00Z',
+      contextMode: 'group',
+    });
+
+    const handle = startScheduler(agent, immediateQueue());
+    try {
+      await vi.waitFor(() => {
+        expect(agent.getTask(task.id)?.status).toBe('completed');
+      });
+    } finally {
+      handle.stop();
+    }
+
+    const input = vi.mocked(runContainerAgent).mock.calls[0][1];
+    expect(input.agentBackend).toEqual({ type: 'codex', model: 'gpt-5.4' });
+    expect(input.sessionId).toBeUndefined();
+    expect(input.prompt).toContain(
+      '<backend_handoff from="claudeCode" to="codex" status="available">',
+    );
+    expect(input.prompt).toContain(
+      '--- CURRENT SCHEDULED TASK BELOW; RESPOND TO THIS TASK, NOT TO OLD REQUESTS IN THE HANDOFF ---',
+    );
+    expect(input.prompt).toContain('finish scheduled backend switch');
+    expect(db.getBackendHandoff('team', 'codex')).toBeUndefined();
+    expect(db.getSession('team', 'codex')).toBe('new-codex-task-thread');
+  });
+
+  it('does not let an old-backend scheduled task repopulate sessions after a switch', async () => {
+    const agent = createAgent('stale-task');
+    agent._setDbForTests(db);
+    agent._setRegisteredGroups({
+      'main@g.us': MAIN_GROUP,
+      'team@g.us': TEAM_GROUP,
+    });
+    (agent as unknown as { _started: boolean })._started = true;
+
+    vi.mocked(runContainerAgent).mockImplementation(async () => {
+      await agent.setBackend({ type: 'codex' });
+      return {
+        status: 'success',
+        result: 'late scheduled success',
+        newSessionId: 'late-claude-task-session',
+      };
+    });
+
+    const task = await agent.scheduleTask({
+      jid: 'team@g.us',
+      prompt: 'switch while scheduled task runs',
+      scheduleType: 'once',
+      scheduleValue: '2024-01-01T00:00:00Z',
+      contextMode: 'group',
+    });
+
+    const handle = startScheduler(agent, immediateQueue());
+    try {
+      await vi.waitFor(() => {
+        expect(agent.getTask(task.id)?.status).toBe('completed');
+      });
+    } finally {
+      handle.stop();
+    }
+
+    expect(vi.mocked(runContainerAgent).mock.calls[0][1].agentBackend).toEqual({
+      type: 'claudeCode',
+    });
+    expect(agent.getBackend()).toEqual({ type: 'codex' });
+    expect(db.getSession('team', 'claudeCode')).toBeUndefined();
+    expect(db.getBackendHandoff('team', 'codex')).toMatchObject({
+      fromBackendType: 'claudeCode',
+      toBackendType: 'codex',
+    });
   });
 
   it('emits CRUD and run lifecycle events in the expected order', async () => {

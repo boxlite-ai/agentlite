@@ -593,6 +593,13 @@ export function buildContainerMcpServers(
   };
 }
 
+export function getAgentBackendModel(
+  containerInput: RuntimeContainerInput,
+): string | undefined {
+  const model = containerInput.agentBackend?.model?.trim();
+  return model || undefined;
+}
+
 function tomlString(value: string): string {
   return JSON.stringify(value);
 }
@@ -747,7 +754,7 @@ class ClaudeCodeQueryRunner<
           ),
         ],
         env: sdkEnv,
-        model: containerInput.agentBackend?.model,
+        model: getAgentBackendModel(containerInput),
         permissionMode: 'bypassPermissions',
         allowDangerouslySkipPermissions: true,
         settingSources: ['project', 'user'],
