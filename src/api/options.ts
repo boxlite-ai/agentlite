@@ -14,10 +14,14 @@ export type AgentBackendType = (typeof AGENT_BACKEND_TYPES)[number];
 
 export interface ClaudeCodeBackendOptions {
   type: 'claudeCode';
+  /** Optional model alias or full model ID. Omit to use the backend default. */
+  model?: string;
 }
 
 export interface CodexBackendOptions {
   type: 'codex';
+  /** Optional model alias or full model ID. Omit to use the backend default. */
+  model?: string;
 }
 
 export type AgentBackendOptions =

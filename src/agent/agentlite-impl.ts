@@ -22,6 +22,7 @@ import {
   type AgentRegistryDb,
   type AgentRegistryRecord,
 } from './registry-db.js';
+import { normalizeAgentBackendOptions } from './backend.js';
 import { cleanupOrphans } from '../box-runtime.js';
 import { buildRuntimeConfig } from '../runtime-config.js';
 import type {
@@ -241,13 +242,17 @@ class AgentLiteImpl implements AgentLite {
       );
     }
 
-    if (
-      options.backend !== undefined &&
-      options.backend.type !== existing.backend.type
-    ) {
-      throw new Error(
-        `Agent "${name}" already exists with backend "${existing.backend.type}"`,
-      );
+    if (options.backend !== undefined) {
+      const requestedBackend = normalizeAgentBackendOptions(options.backend);
+      if (
+        requestedBackend.type !== existing.backend.type ||
+        (requestedBackend.model ?? undefined) !==
+          (existing.backend.model ?? undefined)
+      ) {
+        throw new Error(
+          `Agent "${name}" already exists with backend "${existing.backend.type}"`,
+        );
+      }
     }
 
     if (

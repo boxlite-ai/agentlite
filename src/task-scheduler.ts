@@ -16,6 +16,7 @@ import { RegisteredGroup, ScheduledTask } from './types.js';
 import type { ActionsHttp } from './agent/actions-http.js';
 import type { AgentBackendOptions, McpServerConfig } from './api/options.js';
 import { buildMcpRuntimeConfig } from './agent/mcp-runtime.js';
+import { buildBackendHandoffSummary } from './agent/backend-handoff.js';
 
 /** Minimal emit signature matching agent.emit for task events. */
 export type TaskEventEmitter = <K extends keyof AgentEvents>(
@@ -71,6 +72,8 @@ export interface SchedulerDependencies {
   agentId: string;
   assistantName: string;
   agentBackend: AgentBackendOptions;
+  getAgentBackend?: () => AgentBackendOptions;
+  getBackendRevision?: () => number;
   schedulerPollInterval: number;
   timezone: string;
   runtimeConfig: RuntimeConfig;
@@ -210,11 +213,36 @@ async function runTask(
 
   let result: string | null = null;
   let error: string | null = null;
+  const agentBackend = deps.getAgentBackend?.() ?? deps.agentBackend;
+  const backendRevision = deps.getBackendRevision?.() ?? 0;
 
   // For group context mode, use the group's current session
   const sessions = deps.getSessions();
-  const sessionId =
+  let sessionId =
     task.context_mode === 'group' ? sessions[task.group_folder] : undefined;
+  let prompt = task.prompt;
+  const pendingHandoff =
+    task.context_mode === 'group'
+      ? deps.db.getBackendHandoff(task.group_folder, agentBackend.type)
+      : undefined;
+  if (pendingHandoff) {
+    sessionId = undefined;
+    prompt = [
+      buildBackendHandoffSummary({
+        db: deps.db,
+        chatJid: task.chat_jid,
+        groupFolder: task.group_folder,
+        groupsDir: deps.groupsDir,
+        assistantName: deps.assistantName,
+        fromBackendType: pendingHandoff.fromBackendType,
+        toBackendType: pendingHandoff.toBackendType,
+      }),
+      '',
+      '--- CURRENT SCHEDULED TASK BELOW; RESPOND TO THIS TASK, NOT TO OLD REQUESTS IN THE HANDOFF ---',
+      '',
+      task.prompt,
+    ].join('\n');
+  }
 
   // After the task produces a result, close the container promptly.
   // Tasks are single-turn — no need to wait IDLE_TIMEOUT (30 min) for the
@@ -239,14 +267,14 @@ async function runTask(
     const output = await runContainerAgent(
       group,
       {
-        prompt: task.prompt,
+        prompt,
         sessionId,
         groupFolder: task.group_folder,
         chatJid: task.chat_jid,
         isMain,
         isScheduledTask: true,
         assistantName: deps.assistantName,
-        agentBackend: deps.agentBackend,
+        agentBackend,
         agentId: deps.agentId,
         workDir: deps.workDir,
         groupsDir: deps.groupsDir,
@@ -303,6 +331,25 @@ async function runTask(
     } else if (output.result) {
       // Result was already forwarded to the user via the streaming callback above
       result = output.result;
+    }
+    if (
+      task.context_mode === 'group' &&
+      output.status === 'success' &&
+      output.newSessionId &&
+      (deps.getBackendRevision?.() ?? backendRevision) === backendRevision
+    ) {
+      deps.db.setSession(
+        task.group_folder,
+        output.newSessionId,
+        agentBackend.type,
+      );
+    }
+    if (
+      output.status === 'success' &&
+      pendingHandoff &&
+      (deps.getBackendRevision?.() ?? backendRevision) === backendRevision
+    ) {
+      deps.db.clearBackendHandoff(task.group_folder, agentBackend.type);
     }
 
     logger.info(

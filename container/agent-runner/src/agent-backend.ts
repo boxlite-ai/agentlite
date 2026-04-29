@@ -13,10 +13,12 @@ export type AgentBackendType = (typeof AGENT_BACKEND_TYPES)[number];
 
 export interface ClaudeCodeBackendOptions {
   type: 'claudeCode';
+  model?: string;
 }
 
 export interface CodexBackendOptions {
   type: 'codex';
+  model?: string;
 }
 
 export type AgentBackendOptions =
@@ -34,6 +36,7 @@ export interface RuntimeContainerInput {
   chatJid: string;
   isMain: boolean;
   assistantName?: string;
+  agentBackend?: AgentBackendOptions;
   mcpServers?: Record<string, McpServerRuntimeConfig> | null;
   actionsAuth?: { url: string; token: string } | null;
 }
@@ -744,6 +747,7 @@ class ClaudeCodeQueryRunner<
           ),
         ],
         env: sdkEnv,
+        model: containerInput.agentBackend?.model,
         permissionMode: 'bypassPermissions',
         allowDangerouslySkipPermissions: true,
         settingSources: ['project', 'user'],
@@ -841,23 +845,10 @@ class CodexQueryRunner<
     writeCodexConfig(mcpServerPath, containerInput);
 
     const codexPrompt = buildCodexPrompt(prompt, containerInput);
-    const args = sessionId
-      ? [
-          'exec',
-          'resume',
-          '--json',
-          '--skip-git-repo-check',
-          '--dangerously-bypass-approvals-and-sandbox',
-          sessionId,
-          '-',
-        ]
-      : [
-          'exec',
-          '--json',
-          '--skip-git-repo-check',
-          '--dangerously-bypass-approvals-and-sandbox',
-          '-',
-        ];
+    const args = buildCodexArgs({
+      sessionId,
+      model: containerInput.agentBackend?.model,
+    });
 
     let newSessionId = sessionId;
     let messageCount = 0;
@@ -962,6 +953,33 @@ class CodexQueryRunner<
       });
     });
   }
+}
+
+export function buildCodexArgs(opts: {
+  sessionId?: string;
+  model?: string;
+}): string[] {
+  const model = opts.model?.trim();
+  const modelArgs = model ? ['--model', model] : [];
+  return opts.sessionId
+    ? [
+        'exec',
+        'resume',
+        ...modelArgs,
+        '--json',
+        '--skip-git-repo-check',
+        '--dangerously-bypass-approvals-and-sandbox',
+        opts.sessionId,
+        '-',
+      ]
+    : [
+        'exec',
+        ...modelArgs,
+        '--json',
+        '--skip-git-repo-check',
+        '--dangerously-bypass-approvals-and-sandbox',
+        '-',
+      ];
 }
 
 class DefaultAgentBackendRunnerFactory implements AgentBackendRunnerFactory {

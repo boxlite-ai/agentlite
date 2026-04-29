@@ -32,6 +32,7 @@ interface AgentRegistryRow {
   workdir: string;
   assistant_name: string;
   backend_type: string | null;
+  backend_model: string | null;
   mount_allowlist_json: string | null;
   instructions: string | null;
   skills_sources_json: string | null;
@@ -62,6 +63,7 @@ function createSchema(database: Database.Database): void {
       workdir TEXT NOT NULL,
       assistant_name TEXT NOT NULL,
       backend_type TEXT NOT NULL DEFAULT 'claudeCode',
+      backend_model TEXT,
       mount_allowlist_json TEXT,
       instructions TEXT,
       skills_sources_json TEXT,
@@ -77,6 +79,7 @@ function createSchema(database: Database.Database): void {
     'backend_type',
     `TEXT NOT NULL DEFAULT 'claudeCode'`,
   );
+  addColumnIfMissing(database, 'agents', 'backend_model', 'TEXT');
   addColumnIfMissing(database, 'agents', 'instructions', 'TEXT');
   addColumnIfMissing(database, 'agents', 'skills_sources_json', 'TEXT');
   addColumnIfMissing(database, 'agents', 'mcp_servers_json', 'TEXT');
@@ -96,7 +99,9 @@ function mapRow(
     workDir: row.workdir,
     assistantName: row.assistant_name,
     backend: normalizeAgentBackendOptions(
-      row.backend_type ? { type: row.backend_type } : undefined,
+      row.backend_type
+        ? { type: row.backend_type, model: row.backend_model ?? undefined }
+        : undefined,
     ),
     mountAllowlist: parseMountAllowlist(row.mount_allowlist_json),
     instructions: row.instructions ?? null,
@@ -167,13 +172,14 @@ export class AgentRegistryDb {
                 workdir,
                 assistant_name,
                 backend_type,
+                backend_model,
                 mount_allowlist_json,
                 instructions,
                 skills_sources_json,
                 mcp_servers_json,
                 created_at,
                 updated_at
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `,
           )
           .run(
@@ -182,6 +188,7 @@ export class AgentRegistryDb {
             settings.workDir,
             settings.assistantName,
             settings.backend.type,
+            settings.backend.model ?? null,
             mountAllowlistJson,
             settings.instructions,
             skillsSourcesJson,
@@ -210,6 +217,7 @@ export class AgentRegistryDb {
       instructions?: string | null;
       skillsSources?: string[] | null;
       mcpServers?: Record<string, McpServerConfig> | null;
+      backend?: import('../api/options.js').AgentBackendOptions;
     },
   ): void {
     const sets: string[] = [];
@@ -232,6 +240,13 @@ export class AgentRegistryDb {
           ? JSON.stringify(normalizeJson(updates.mcpServers))
           : null,
       );
+    }
+    if ('backend' in updates && updates.backend) {
+      const backend = normalizeAgentBackendOptions(updates.backend);
+      sets.push('backend_type = ?');
+      values.push(backend.type);
+      sets.push('backend_model = ?');
+      values.push(backend.model ?? null);
     }
 
     if (sets.length === 0) return;

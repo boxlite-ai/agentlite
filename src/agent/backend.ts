@@ -28,7 +28,12 @@ export function normalizeAgentBackendOptions(
     'type' in value &&
     isAgentBackendType(value.type)
   ) {
-    return { type: value.type };
+    const backend = value as { type: AgentBackendType; model?: unknown };
+    const model =
+      typeof backend.model === 'string' && backend.model.trim()
+        ? backend.model.trim()
+        : undefined;
+    return model ? { type: backend.type, model } : { type: backend.type };
   }
 
   throw new Error(

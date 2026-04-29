@@ -10,6 +10,7 @@ import { readEnvFile } from './env.js';
 import { resolveMountAllowlist } from './mount-security.js';
 import { isValidTimezone } from './timezone.js';
 import type { AgentLiteOptions, AgentOptions } from './api/options.js';
+import { normalizeAgentBackendOptions } from './agent/backend.js';
 
 let envConfig: Record<string, string> = {};
 
@@ -18,6 +19,8 @@ export function loadEnvConfig(): void {
   envConfig = readEnvFile([
     'ASSISTANT_NAME',
     'ASSISTANT_HAS_OWN_NUMBER',
+    'AGENTLITE_AGENT_BACKEND',
+    'AGENTLITE_AGENT_MODEL',
     'ONECLI_URL',
     'TZ',
   ]);
@@ -49,8 +52,25 @@ export function buildAgentOptionsFromEnv(): AgentOptions {
     'agentlite',
     'mount-allowlist.json',
   );
+  const backendType =
+    process.env.AGENTLITE_AGENT_BACKEND || envConfig.AGENTLITE_AGENT_BACKEND;
+  const backendModel =
+    process.env.AGENTLITE_AGENT_MODEL || envConfig.AGENTLITE_AGENT_MODEL;
+  const backend = backendType
+    ? normalizeAgentBackendOptions({
+        type: backendType,
+        model: backendModel || undefined,
+      })
+    : backendModel
+      ? normalizeAgentBackendOptions({
+          type: 'claudeCode',
+          model: backendModel,
+        })
+      : undefined;
+
   return {
     name: process.env.ASSISTANT_NAME || envConfig.ASSISTANT_NAME || undefined,
+    backend,
     mountAllowlist: resolveMountAllowlist(null, allowlistPath) ?? undefined,
   };
 }

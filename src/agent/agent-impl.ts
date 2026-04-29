@@ -12,7 +12,11 @@ import type { TypedEmitter } from '../typed-emitter.js';
 import type { AgentEvents } from '../api/events.js';
 import type { AgentConfig } from './config.js';
 import type { RuntimeConfig } from '../runtime-config.js';
-import type { AgentOptions, CredentialResolver } from '../api/options.js';
+import type {
+  AgentBackendOptions,
+  AgentOptions,
+  CredentialResolver,
+} from '../api/options.js';
 import type {
   AvailableGroup,
   RegisterGroupOptions,
@@ -62,6 +66,7 @@ import { GroupManager } from './group-manager.js';
 import { TaskManager } from './task-manager.js';
 import { MessageProcessor } from './message-processor.js';
 import { registerBudgetActions } from './budget-actions.js';
+import { normalizeAgentBackendOptions } from './backend.js';
 
 export { type Agent };
 
@@ -78,6 +83,7 @@ export class AgentImpl
   sessions: Record<string, string> = {};
   registeredGroups: Record<string, InternalRegisteredGroup> = {};
   lastAgentTimestamp: Record<string, string> = {};
+  backendRevision = 0;
   lastTimestamp = '';
   channels = new Map<string, Channel>();
   credentialResolver: CredentialResolver | null = null;
@@ -194,6 +200,77 @@ export class AgentImpl
   async sendMessage(jid: string, text: string): Promise<void> {
     const sent = await this.channelMgr.sendOutboundMessage(jid, text);
     if (!sent) throw new Error(`No channel for JID: ${jid}`);
+  }
+
+  // ─── Backend Management ─────────────────────────────────────────
+
+  getBackend(): AgentBackendOptions {
+    return { ...this.config.backend };
+  }
+
+  async setBackend(
+    backend: AgentBackendOptions,
+    options?: { context?: 'handoff' | 'fresh' },
+  ): Promise<{
+    previous: AgentBackendOptions;
+    current: AgentBackendOptions;
+    applies: 'nextTurn';
+    handoff: 'notNeeded' | 'pending' | 'skipped';
+  }> {
+    const previous = { ...this.config.backend };
+    const current = normalizeAgentBackendOptions(backend);
+    const typeChanged = previous.type !== current.type;
+    const unchanged =
+      previous.type === current.type &&
+      (previous.model ?? undefined) === (current.model ?? undefined);
+    const context = options?.context ?? 'handoff';
+
+    if (unchanged) {
+      return {
+        previous,
+        current,
+        applies: 'nextTurn',
+        handoff: 'notNeeded',
+      };
+    }
+
+    (this.config as { backend: AgentBackendOptions }).backend = current;
+    this._registry?.updateAgent(this.config.agentName, { backend: current });
+
+    let handoff: 'notNeeded' | 'pending' | 'skipped' = 'notNeeded';
+    if (typeChanged) {
+      this.backendRevision++;
+      const groupFolders = [
+        ...new Set(Object.values(this.registeredGroups).map((g) => g.folder)),
+      ];
+      if (this._started && groupFolders.length > 0) {
+        this.db.deleteSessionsForBackend(groupFolders, current.type);
+        for (const folder of groupFolders) {
+          delete this.sessions[folder];
+        }
+        if (context === 'handoff') {
+          this.db.setBackendHandoffs(groupFolders, previous.type, current.type);
+          handoff = 'pending';
+        } else {
+          handoff = 'skipped';
+        }
+      } else {
+        handoff = 'skipped';
+      }
+    }
+
+    if (this._started) {
+      for (const jid of Object.keys(this.registeredGroups)) {
+        this.queue.closeStdin(jid);
+      }
+    }
+
+    return {
+      previous,
+      current,
+      applies: 'nextTurn',
+      handoff,
+    };
   }
 
   // ─── Scheduled tasks ────────────────────────────────────────────
@@ -442,6 +519,7 @@ export class AgentImpl
       storeDir: this.config.storeDir,
       dataDir: this.config.dataDir,
       assistantName: this.config.assistantName,
+      currentBackendType: this.config.backend.type,
     });
     registerBudgetActions(this, this.db);
     logger.info({ agent: this.name }, 'Database initialized');
@@ -493,6 +571,8 @@ export class AgentImpl
       agentId: this.id,
       assistantName: this.config.assistantName,
       agentBackend: this.config.backend,
+      getAgentBackend: () => this.config.backend,
+      getBackendRevision: () => this.backendRevision,
       schedulerPollInterval: this.runtimeConfig.schedulerPollInterval,
       timezone: this.runtimeConfig.timezone,
       runtimeConfig: this.runtimeConfig,

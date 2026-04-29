@@ -14,6 +14,7 @@ vi.mock('../box-runtime.js', () => ({
 import { AgentImpl } from './agent-impl.js';
 import { createAgentLiteImpl } from './agentlite-impl.js';
 import { getAgentRegistryDbPath, initAgentRegistryDb } from './registry-db.js';
+import { _initTestDatabase } from '../db.js';
 import type { AgentLite, AgentOptions } from '../api/sdk.js';
 import type { MountAllowlist } from '../types.js';
 
@@ -50,7 +51,7 @@ describe('AgentLite platform registry', () => {
 
     const agent = platform.createAgent('alice', {
       name: 'Alice',
-      backend: { type: 'codex' },
+      backend: { type: 'codex', model: 'gpt-5.4' },
       mountAllowlist: allowlist,
     });
 
@@ -60,7 +61,7 @@ describe('AgentLite platform registry', () => {
       expect(row).toBeDefined();
       expect(row!.agentId).toBe(agent.id);
       expect(row!.assistantName).toBe('Alice');
-      expect(row!.backend.type).toBe('codex');
+      expect(row!.backend).toEqual({ type: 'codex', model: 'gpt-5.4' });
       expect(row!.workDir).toBe(path.join(tmpDir, 'agents', 'alice'));
       expect(row!.mountAllowlist).toEqual(allowlist);
     } finally {
@@ -146,6 +147,125 @@ describe('AgentLite platform registry', () => {
     expect(() =>
       secondPlatform.getOrCreateAgent('alice', { backend: { type: 'codex' } }),
     ).toThrow('backend');
+  });
+
+  it('rejects conflicting creation-time backend models', async () => {
+    const platform = await createAgentLiteImpl({ workdir: tmpDir });
+    platforms.push(platform);
+
+    platform.createAgent('alice', {
+      backend: { type: 'claudeCode', model: 'claude-sonnet-4-6' },
+    });
+
+    expect(() =>
+      platform.getOrCreateAgent('alice', {
+        backend: { type: 'claudeCode', model: 'claude-opus-4-6' },
+      }),
+    ).toThrow('backend');
+    expect(() =>
+      platform.getOrCreateAgent('alice', {
+        backend: { type: 'claudeCode', model: ' claude-sonnet-4-6 ' },
+      }),
+    ).not.toThrow();
+  });
+
+  it('setBackend persists changes and marks backend switches for handoff', async () => {
+    const platform = await createAgentLiteImpl({ workdir: tmpDir });
+    platforms.push(platform);
+
+    const agent = platform.createAgent('alice') as AgentImpl;
+    agent.db = _initTestDatabase();
+    agent.registeredGroups['self-chat'] = {
+      name: 'Main',
+      folder: 'main',
+      trigger: 'always',
+      added_at: new Date().toISOString(),
+      isMain: true,
+    };
+    agent.sessions.main = 'old-codex-thread';
+    agent.db.setSession('main', 'old-codex-thread', 'codex');
+    const closeSpy = vi.spyOn(agent.queue, 'closeStdin');
+    (agent as unknown as { _started: boolean })._started = true;
+
+    expect(agent.backendRevision).toBe(0);
+    const result = await agent.setBackend({
+      type: 'codex',
+      model: 'gpt-5.4',
+    });
+
+    expect(result).toMatchObject({
+      previous: { type: 'claudeCode' },
+      current: { type: 'codex', model: 'gpt-5.4' },
+      applies: 'nextTurn',
+      handoff: 'pending',
+    });
+    expect(agent.getBackend()).toEqual({ type: 'codex', model: 'gpt-5.4' });
+    expect(agent.sessions.main).toBeUndefined();
+    expect(agent.db.getSession('main', 'codex')).toBeUndefined();
+    expect(agent.db.getBackendHandoff('main', 'codex')).toMatchObject({
+      fromBackendType: 'claudeCode',
+      toBackendType: 'codex',
+    });
+    expect(closeSpy).toHaveBeenCalledWith('self-chat');
+    expect(agent.backendRevision).toBe(1);
+
+    const registry = initAgentRegistryDb(tmpDir);
+    try {
+      expect(registry.getAgent('alice')!.backend).toEqual({
+        type: 'codex',
+        model: 'gpt-5.4',
+      });
+    } finally {
+      registry.close();
+    }
+  });
+
+  it('same-backend model changes do not create handoff state', async () => {
+    const platform = await createAgentLiteImpl({ workdir: tmpDir });
+    platforms.push(platform);
+
+    const agent = platform.createAgent('alice') as AgentImpl;
+    agent.db = _initTestDatabase();
+    agent.registeredGroups['self-chat'] = {
+      name: 'Main',
+      folder: 'main',
+      trigger: 'always',
+      added_at: new Date().toISOString(),
+      isMain: true,
+    };
+    (agent as unknown as { _started: boolean })._started = true;
+
+    expect(agent.backendRevision).toBe(0);
+    const result = await agent.setBackend({
+      type: 'claudeCode',
+      model: 'claude-opus-4-6',
+    });
+
+    expect(result.handoff).toBe('notNeeded');
+    expect(agent.db.getBackendHandoff('main', 'claudeCode')).toBeUndefined();
+    expect(agent.backendRevision).toBe(0);
+  });
+
+  it('setBackend no-ops when backend and model are unchanged', async () => {
+    const platform = await createAgentLiteImpl({ workdir: tmpDir });
+    platforms.push(platform);
+
+    const agent = platform.createAgent('alice') as AgentImpl;
+    agent.db = _initTestDatabase();
+    agent.registeredGroups['self-chat'] = {
+      name: 'Main',
+      folder: 'main',
+      trigger: 'always',
+      added_at: new Date().toISOString(),
+      isMain: true,
+    };
+    const closeSpy = vi.spyOn(agent.queue, 'closeStdin');
+    (agent as unknown as { _started: boolean })._started = true;
+
+    const result = await agent.setBackend({ type: 'claudeCode' });
+
+    expect(result.handoff).toBe('notNeeded');
+    expect(closeSpy).not.toHaveBeenCalled();
   });
 
   it('keeps createAgent strict for restored names, deletes the workdir, and removes registry rows on delete', async () => {
