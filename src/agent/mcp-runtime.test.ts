@@ -18,7 +18,7 @@ describe('buildMcpRuntimeConfig', () => {
     expect(out).toEqual({
       demo: {
         command: 'node',
-        args: ['/home/node/.claude/mcp/demo/index.js', '--flag'],
+        args: ['/workspace/mcp/demo/index.js', '--flag'],
         env: undefined,
       },
     });
@@ -34,7 +34,7 @@ describe('buildMcpRuntimeConfig', () => {
     });
     expect(out!.ts.args).toEqual([
       '--experimental-transform-types',
-      '/home/node/.claude/mcp/ts/server.ts',
+      '/workspace/mcp/ts/server.ts',
     ]);
   });
 
@@ -86,9 +86,9 @@ describe('buildMcpRuntimeConfig', () => {
 
     expect(out!.ts.args).toEqual([
       '--experimental-transform-types',
-      '/home/node/.claude/mcp/ts/index.ts',
+      '/workspace/mcp/ts/index.ts',
     ]);
-    expect(out!.js.args).toEqual(['/home/node/.claude/mcp/js/index.js']);
+    expect(out!.js.args).toEqual(['/workspace/mcp/js/index.js']);
   });
 
   it('keeps node commands with no args unchanged', () => {

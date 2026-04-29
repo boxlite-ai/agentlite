@@ -8,36 +8,56 @@ export const INSTRUCTION_FILES = [
   COMPAT_INSTRUCTION_FILE,
 ] as const;
 
-function ensureFileAlias(
-  sourcePath: string,
-  targetPath: string,
-  relativeLinkTarget: string,
-): void {
-  if (fs.existsSync(targetPath)) return;
-
+function pathExists(filePath: string): boolean {
   try {
-    fs.symlinkSync(relativeLinkTarget, targetPath);
+    fs.lstatSync(filePath);
+    return true;
   } catch {
-    fs.copyFileSync(sourcePath, targetPath);
+    return false;
   }
 }
 
-export function ensureInstructionAliases(dir: string): void {
-  const existingName = INSTRUCTION_FILES.find((name) =>
-    fs.existsSync(path.join(dir, name)),
-  );
-  if (!existingName) return;
-
-  const sourcePath = path.join(dir, existingName);
-  for (const name of INSTRUCTION_FILES) {
-    if (name === existingName) continue;
-    ensureFileAlias(sourcePath, path.join(dir, name), existingName);
+function compatSymlinkPointsToPrimary(dir: string): boolean {
+  const compatPath = path.join(dir, COMPAT_INSTRUCTION_FILE);
+  try {
+    const stat = fs.lstatSync(compatPath);
+    if (!stat.isSymbolicLink()) return false;
+    const target = fs.readlinkSync(compatPath);
+    return (
+      path.resolve(dir, target) === path.join(dir, PRIMARY_INSTRUCTION_FILE)
+    );
+  } catch {
+    return false;
   }
+}
+
+function replaceCompatSymlink(dir: string): void {
+  const compatPath = path.join(dir, COMPAT_INSTRUCTION_FILE);
+  if (compatSymlinkPointsToPrimary(dir)) return;
+  if (pathExists(compatPath)) {
+    fs.rmSync(compatPath, { recursive: true, force: true });
+  }
+  fs.symlinkSync(PRIMARY_INSTRUCTION_FILE, compatPath);
+}
+
+export function ensureInstructionAliases(dir: string): void {
+  const primaryPath = path.join(dir, PRIMARY_INSTRUCTION_FILE);
+  const compatPath = path.join(dir, COMPAT_INSTRUCTION_FILE);
+
+  if (!pathExists(primaryPath)) {
+    if (!pathExists(compatPath)) return;
+    try {
+      fs.writeFileSync(primaryPath, fs.readFileSync(compatPath, 'utf-8'));
+    } catch {
+      return;
+    }
+  }
+
+  replaceCompatSymlink(dir);
 }
 
 export function writeInstructionFiles(dir: string, content: string): void {
   fs.mkdirSync(dir, { recursive: true });
-  for (const name of INSTRUCTION_FILES) {
-    fs.writeFileSync(path.join(dir, name), content);
-  }
+  fs.writeFileSync(path.join(dir, PRIMARY_INSTRUCTION_FILE), content);
+  replaceCompatSymlink(dir);
 }

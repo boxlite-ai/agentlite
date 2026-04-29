@@ -11,6 +11,8 @@
     "container/agent-runner/package.json",
     "container/agent-runner/package-lock.json",
     "container/agent-runner/tsconfig.json",
+    "groups/global/CLAUDE.md",
+    "groups/main/CLAUDE.md",
     "README.md",
     "LICENSE"
   ],

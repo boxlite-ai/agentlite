@@ -257,7 +257,7 @@ describe('AgentRegistryDb instructions/skills/mcpServers', () => {
 // ─── syncAgentCustomizations ────────────────────────────────────────
 
 describe('syncAgentCustomizations', () => {
-  it('writes instructions to agentDir/CLAUDE.md and agentDir/AGENTS.md', () => {
+  it('writes instructions to CLAUDE.md and symlinks AGENTS.md', () => {
     const agentDir = path.join(tmpDir, 'agent');
     syncAgentCustomizations({
       instructions: 'You are a finance assistant.',
@@ -274,6 +274,10 @@ describe('syncAgentCustomizations', () => {
       'utf-8',
     );
     expect(agentsContent).toBe('You are a finance assistant.');
+    expect(
+      fs.lstatSync(path.join(agentDir, 'AGENTS.md')).isSymbolicLink(),
+    ).toBe(true);
+    expect(fs.readlinkSync(path.join(agentDir, 'AGENTS.md'))).toBe('CLAUDE.md');
   });
 
   it('copies skill directory with supporting files', () => {

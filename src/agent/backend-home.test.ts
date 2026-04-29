@@ -8,7 +8,10 @@ import {
   AGENT_BACKEND_HOME_LIST,
   AGENT_BACKEND_HOME_SPECS,
   CONTAINER_CUSTOM_MCP_DIR,
+  CONTAINER_SHARED_SKILLS_DIR,
+  resolveCustomMcpDir,
   resolveAgentBackendHomeDir,
+  resolveSharedSkillsDir,
 } from './backend-home.js';
 
 let tmpDir: string;
@@ -29,6 +32,18 @@ describe('resolveAgentBackendHomeDir', () => {
     expect(resolveAgentBackendHomeDir(tmpDir, 'codex')).toBe(
       path.join(tmpDir, AGENT_BACKEND_HOME_SPECS.codex.homeDirName),
     );
+  });
+});
+
+describe('resolveCustomMcpDir', () => {
+  it('uses a backend-neutral staging directory under the group session root', () => {
+    expect(resolveCustomMcpDir(tmpDir)).toBe(path.join(tmpDir, 'mcp'));
+  });
+});
+
+describe('resolveSharedSkillsDir', () => {
+  it('uses a backend-neutral skills directory under the group session root', () => {
+    expect(resolveSharedSkillsDir(tmpDir)).toBe(path.join(tmpDir, 'skills'));
   });
 });
 
@@ -58,8 +73,12 @@ describe('AGENT_BACKEND_HOME_SPECS', () => {
     expect(AGENT_BACKEND_HOME_LIST).toHaveLength(2);
   });
 
-  it('keeps the shared MCP staging directory under the Claude Code home', () => {
-    expect(CONTAINER_CUSTOM_MCP_DIR).toBe('/home/node/.claude/mcp');
+  it('keeps the shared MCP staging directory outside backend homes', () => {
+    expect(CONTAINER_CUSTOM_MCP_DIR).toBe('/workspace/mcp');
+  });
+
+  it('keeps the shared skills directory outside backend homes', () => {
+    expect(CONTAINER_SHARED_SKILLS_DIR).toBe('/workspace/skills');
   });
 });
 

@@ -7,7 +7,11 @@ import path from 'path';
 
 import {
   AGENT_BACKEND_HOME_LIST,
+  CONTAINER_CUSTOM_MCP_DIR,
+  CONTAINER_SHARED_SKILLS_DIR,
   resolveAgentBackendHomeDir,
+  resolveCustomMcpDir,
+  resolveSharedSkillsDir,
 } from './agent/backend-home.js';
 import { ensureInstructionAliases } from './agent/instruction-files.js';
 import type { AgentBackendOptions, AgentBackendType } from './api/options.js';
@@ -150,6 +154,9 @@ function syncSkillsDir(
   agentSkillsSrc: string,
   dstRoot: string,
 ): void {
+  if (fs.existsSync(dstRoot)) {
+    fs.rmSync(dstRoot, { recursive: true, force: true });
+  }
   fs.mkdirSync(dstRoot, { recursive: true });
 
   const builtinNames = new Set<string>();
@@ -172,6 +179,35 @@ function syncSkillsDir(
     }
     copyDirRecursive(srcDir, path.join(dstRoot, skillDir));
   }
+}
+
+function syncCustomMcpDir(agentMcpSrc: string, mcpDst: string): void {
+  if (fs.existsSync(mcpDst)) {
+    fs.rmSync(mcpDst, { recursive: true, force: true });
+  }
+  fs.mkdirSync(mcpDst, { recursive: true });
+
+  if (!fs.existsSync(agentMcpSrc)) return;
+
+  for (const name of fs.readdirSync(agentMcpSrc)) {
+    const srcDir = path.join(agentMcpSrc, name);
+    if (!fs.statSync(srcDir).isDirectory()) continue;
+    const dstDir = path.join(mcpDst, name);
+    copyDirRecursive(srcDir, dstDir);
+    // Symlink targets /app/node_modules inside the container.
+    const nmLink = path.join(dstDir, 'node_modules');
+    if (!fs.existsSync(nmLink)) {
+      fs.symlinkSync('/app/node_modules', nmLink);
+    }
+  }
+}
+
+function ensureBackendSkillsSymlink(backendHomeDir: string): void {
+  const skillsPath = path.join(backendHomeDir, 'skills');
+  if (fs.existsSync(skillsPath)) {
+    fs.rmSync(skillsPath, { recursive: true, force: true });
+  }
+  fs.symlinkSync(CONTAINER_SHARED_SKILLS_DIR, skillsPath);
 }
 
 function buildVolumeMounts(
@@ -253,41 +289,21 @@ function buildVolumeMounts(
     backendHomeDirs[spec.type] = homeDir;
   }
 
-  // Sync skills from container/skills/ into each group's backend home.
+  // Sync skills once into a backend-neutral per-group staging dir, then mount
+  // that same directory into each backend's native skills location.
   const skillsSrc = path.join(packageRoot, 'container', 'skills');
   const agentDir = path.join(workDir, 'agent');
   const agentSkillsSrc = path.join(agentDir, 'skills');
+  const sharedSkillsDir = resolveSharedSkillsDir(backendRootDir);
+  syncSkillsDir(skillsSrc, agentSkillsSrc, sharedSkillsDir);
   for (const spec of AGENT_BACKEND_HOME_LIST) {
-    syncSkillsDir(
-      skillsSrc,
-      agentSkillsSrc,
-      path.join(backendHomeDirs[spec.type], 'skills'),
-    );
+    ensureBackendSkillsSymlink(backendHomeDirs[spec.type]);
   }
 
-  // Sync custom MCP server sources into the shared MCP backend home.
-  // Both backends reference this staging directory today, so the host-side
-  // copy stays centralized instead of branching per backend.
+  // Sync custom MCP server sources into a backend-neutral per-group staging dir.
   const agentMcpSrc = path.join(agentDir, 'mcp');
-  const mcpDst = path.join(backendHomeDirs.claudeCode, 'mcp');
-  if (fs.existsSync(agentMcpSrc)) {
-    if (fs.existsSync(mcpDst)) {
-      fs.rmSync(mcpDst, { recursive: true });
-    }
-    for (const name of fs.readdirSync(agentMcpSrc)) {
-      const srcDir = path.join(agentMcpSrc, name);
-      if (!fs.statSync(srcDir).isDirectory()) continue;
-      const dstDir = path.join(mcpDst, name);
-      copyDirRecursive(srcDir, dstDir);
-      // Symlink targets /app/node_modules inside the container
-      const nmLink = path.join(dstDir, 'node_modules');
-      if (!fs.existsSync(nmLink)) {
-        fs.symlinkSync('/app/node_modules', nmLink);
-      }
-    }
-  } else if (fs.existsSync(mcpDst)) {
-    fs.rmSync(mcpDst, { recursive: true });
-  }
+  const customMcpDir = resolveCustomMcpDir(backendRootDir);
+  syncCustomMcpDir(agentMcpSrc, customMcpDir);
 
   for (const spec of AGENT_BACKEND_HOME_LIST) {
     mounts.push({
@@ -296,6 +312,16 @@ function buildVolumeMounts(
       readonly: false,
     });
   }
+  mounts.push({
+    hostPath: sharedSkillsDir,
+    containerPath: CONTAINER_SHARED_SKILLS_DIR,
+    readonly: false,
+  });
+  mounts.push({
+    hostPath: customMcpDir,
+    containerPath: CONTAINER_CUSTOM_MCP_DIR,
+    readonly: false,
+  });
 
   // Mount agent-level customization dir (read-only) for instructions/skills/MCP.
   if (fs.existsSync(agentDir)) {

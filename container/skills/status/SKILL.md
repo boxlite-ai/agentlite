@@ -14,6 +14,7 @@ test -d /workspace/project && echo "MAIN" || echo "NOT_MAIN"
 ```
 
 If `NOT_MAIN`, respond with:
+
 > This command is available in your main chat only. Send `/status` there to check system status.
 
 Then stop — do not generate the report.
@@ -45,12 +46,12 @@ ls /workspace/ipc/ 2>/dev/null
 
 ### 3. Tool availability
 
-Confirm which tool families are available to you:
+Confirm which tool families are available to you. Tool names differ by backend, so report families rather than backend-specific names:
 
-- **Core:** Bash, Read, Write, Edit, Glob, Grep
-- **Web:** WebSearch, WebFetch
-- **Orchestration:** Task, TaskOutput, TaskStop, TeamCreate, TeamDelete, SendMessage
-- **MCP:** mcp__agentlite__* (send_message, schedule_task, list_tasks, pause_task, resume_task, cancel_task, update_task, register_group, search_actions, call_action)
+- **Workspace:** shell commands, file reads/writes, search, and edits
+- **Web:** web/browser tools when installed by the active backend
+- **Orchestration:** delegation or task tools when available
+- **MCP:** `mcp__agentlite__*` (send_message, schedule_task, list_tasks, pause_task, resume_task, cancel_task, update_task, register_group, search_actions, call_action)
 
 ### 4. Container utilities
 
@@ -58,6 +59,7 @@ Confirm which tool families are available to you:
 which agent-browser 2>/dev/null && echo "agent-browser: available" || echo "agent-browser: not installed"
 node --version 2>/dev/null
 claude --version 2>/dev/null
+codex --version 2>/dev/null
 ```
 
 ### 5. Task snapshot
@@ -88,12 +90,13 @@ Present as a clean, readable message:
 • IPC: ✓ (messages, tasks, input)
 
 *Tools:*
-• Core: ✓  Web: ✓  Orchestration: ✓  MCP: ✓
+• Workspace: ✓  Web: ✓/not installed  Orchestration: ✓/not installed  MCP: ✓
 
 *Container:*
 • agent-browser: ✓ / not installed
 • Node: vXX.X.X
 • Claude Code: vX.X.X
+• Codex: vX.X.X
 
 *Scheduled Tasks:*
 • N active tasks / No scheduled tasks
