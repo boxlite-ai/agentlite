@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildCodexArgs } from '../container/agent-runner/src/agent-backend.js';
+import {
+  buildCodexArgs,
+  getAgentBackendModel,
+} from '../container/agent-runner/src/agent-backend.js';
 
 describe('container agent backend helpers', () => {
   it('passes model to codex exec', () => {
@@ -41,5 +44,33 @@ describe('container agent backend helpers', () => {
       'session-123',
       '-',
     ]);
+    expect(buildCodexArgs({ sessionId: 'session-123', model: '   ' })).toEqual([
+      'exec',
+      'resume',
+      '--json',
+      '--skip-git-repo-check',
+      '--dangerously-bypass-approvals-and-sandbox',
+      'session-123',
+      '-',
+    ]);
+  });
+
+  it('normalizes model overrides before runner-specific option wiring', () => {
+    expect(
+      getAgentBackendModel({
+        groupFolder: 'main',
+        chatJid: 'main@g.us',
+        isMain: true,
+        agentBackend: { type: 'claudeCode', model: ' claude-opus-4-6 ' },
+      }),
+    ).toBe('claude-opus-4-6');
+    expect(
+      getAgentBackendModel({
+        groupFolder: 'main',
+        chatJid: 'main@g.us',
+        isMain: true,
+        agentBackend: { type: 'codex', model: '   ' },
+      }),
+    ).toBeUndefined();
   });
 });
