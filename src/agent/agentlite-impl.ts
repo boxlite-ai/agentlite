@@ -171,7 +171,7 @@ class AgentLiteImpl implements AgentLite {
 
     const agentId = agent?.id ?? record?.agentId;
     if (agentId) {
-      await cleanupOrphans(agentId);
+      await cleanupOrphans(agentId, { includeLive: true });
     }
 
     const workDir = agent

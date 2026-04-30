@@ -15,6 +15,7 @@ vi.mock('../box-runtime.js', () => ({
 import { AgentImpl } from './agent-impl.js';
 import { createAgentLiteImpl } from './agentlite-impl.js';
 import { getAgentRegistryDbPath, initAgentRegistryDb } from './registry-db.js';
+import { cleanupOrphans } from '../box-runtime.js';
 import { _initTestDatabase } from '../db.js';
 import type { AgentLite, AgentOptions } from '../api/sdk.js';
 import type { MountAllowlist } from '../types.js';
@@ -482,7 +483,7 @@ describe('AgentLite platform registry', () => {
     const firstPlatform = await createAgentLiteImpl({ workdir: tmpDir });
     platforms.push(firstPlatform);
     const agentWorkdir = path.join(tmpDir, 'custom-agents', 'alice');
-    firstPlatform.createAgent('alice', {
+    const agent = firstPlatform.createAgent('alice', {
       name: 'Alice',
       workdir: agentWorkdir,
     });
@@ -498,6 +499,9 @@ describe('AgentLite platform registry', () => {
     );
 
     await secondPlatform.deleteAgent('alice');
+    expect(cleanupOrphans).toHaveBeenCalledWith(agent.id, {
+      includeLive: true,
+    });
     expect(secondPlatform.agents.has('alice')).toBe(false);
     expect(fs.existsSync(agentWorkdir)).toBe(false);
     expect(fs.existsSync(getAgentRegistryDbPath(tmpDir))).toBe(true);
