@@ -115,6 +115,10 @@ function installFakePeer(agent: AgentImpl): {
     prompt: ReturnType<typeof vi.fn>;
     cancel: ReturnType<typeof vi.fn>;
   };
+  sessions: Map<
+    string,
+    { accumulator: { text: string[]; toolCalls: unknown[] } | null }
+  >;
 } {
   if (!agent.acpClient) {
     throw new Error('ACP client was not initialized');
@@ -162,7 +166,7 @@ function installFakePeer(agent: AgentImpl): {
     };
   });
 
-  return { promptDeferred, fakeConnection };
+  return { promptDeferred, fakeConnection, sessions: acpClient.sessions };
 }
 
 function extractArtifactPath(notice: string): string {
@@ -504,5 +508,92 @@ describe('AcpOutboundClient integration', () => {
       error: 'Host restarted before ACP prompt completed',
     });
     expect(fs.existsSync(expiredPath)).toBe(false);
+  });
+
+  describe('agent_delegate', () => {
+    it('returns the delegated peer response synchronously on success', async () => {
+      const agent = createAgent('acp-delegate-success', tmpDir);
+      agents.push(agent);
+      await agent.start();
+      await agent.registerGroup('team@g.us', TEAM_GROUP);
+
+      const { fakeConnection, sessions } = installFakePeer(agent);
+      fakeConnection.prompt.mockImplementationOnce(
+        async ({ sessionId }: { sessionId: string }) => {
+          const session = sessions.get(sessionId);
+          session?.accumulator?.text.push('delegate says hello');
+          return { stopReason: 'end_turn' };
+        },
+      );
+
+      const response = await callAction(
+        agent,
+        'team',
+        'agent_delegate',
+        {
+          target_group_jid: 'fake-peer',
+          prompt: 'say hello',
+        },
+        'team@g.us',
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.json.result).toMatchObject({
+        status: 'completed',
+        stop_reason: 'end_turn',
+        text: 'delegate says hello',
+      });
+    });
+
+    it('fails when the target peer is unknown', async () => {
+      const agent = createAgent('acp-delegate-missing-peer', tmpDir);
+      agents.push(agent);
+      await agent.start();
+      await agent.registerGroup('team@g.us', TEAM_GROUP);
+
+      const response = await callAction(
+        agent,
+        'team',
+        'agent_delegate',
+        {
+          target_group_jid: 'missing-peer',
+          prompt: 'hello',
+        },
+        'team@g.us',
+      );
+
+      expect(response.status).toBeGreaterThanOrEqual(400);
+      expect(response.json.error).toContain('unknown acp peer');
+    });
+
+    it('returns a failed result when agent_delegate times out', async () => {
+      const agent = createAgent('acp-delegate-timeout', tmpDir);
+      agents.push(agent);
+      await agent.start();
+      await agent.registerGroup('team@g.us', TEAM_GROUP);
+
+      const { fakeConnection } = installFakePeer(agent);
+      fakeConnection.prompt.mockImplementationOnce(
+        async () => await new Promise<{ stopReason: string }>(() => {}),
+      );
+
+      const response = await callAction(
+        agent,
+        'team',
+        'agent_delegate',
+        {
+          target_group_jid: 'fake-peer',
+          prompt: 'hang forever',
+          timeout_ms: 100,
+        },
+        'team@g.us',
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.json.result).toMatchObject({
+        status: 'failed',
+        error: expect.stringContaining('timed out'),
+      });
+    });
   });
 });
