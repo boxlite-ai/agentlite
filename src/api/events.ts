@@ -10,6 +10,10 @@ export interface AgentEvents extends Record<string, any[]> {
   'message.out': [payload: MessageOutEvent];
   'run.state': [payload: RunStateEvent];
   'run.sdk_message': [payload: RunSdkMessageEvent];
+  'run.partial_content': [payload: AgentPartialContentEvent];
+  'run.partial_tool_call': [payload: AgentPartialToolCallEvent];
+  'run.partial_content.done': [payload: AgentPartialContentDoneEvent];
+  'run.partial_content.interrupted': [payload: AgentPartialContentInterruptedEvent];
   'run.tool': [payload: RunToolEvent];
   'run.tool_progress': [payload: RunToolProgressEvent];
   'run.subagent': [payload: RunSubagentEvent];
@@ -290,6 +294,45 @@ export interface TaskRunFailedEvent {
   error: string;
   /** Next scheduled run after this one, or null if terminal. */
   nextRun: string | null;
+  timestamp: string;
+}
+
+// ── Partial content streaming events ────────────────────────────
+
+/** Emitted for each text token delta during streaming. */
+export interface AgentPartialContentEvent {
+  agentId: string;
+  jid: string;
+  /** Incremental text delta (not cumulative). */
+  delta: string;
+  /** Index of the content block being streamed (undefined if unavailable). */
+  contentBlockIndex?: number;
+  timestamp: string;
+}
+
+/** Emitted for each chunk of tool-call argument JSON being built. */
+export interface AgentPartialToolCallEvent {
+  agentId: string;
+  jid: string;
+  /** Incremental JSON delta for the tool call arguments. */
+  jsonDelta: string;
+  /** Index of the tool-use content block (undefined if unavailable). */
+  contentBlockIndex?: number;
+  timestamp: string;
+}
+
+/** Emitted when a streaming turn completes normally (message_stop received). */
+export interface AgentPartialContentDoneEvent {
+  agentId: string;
+  jid: string;
+  timestamp: string;
+}
+
+/** Emitted when a streaming turn is interrupted (container crash, timeout, SIGKILL). */
+export interface AgentPartialContentInterruptedEvent {
+  agentId: string;
+  jid: string;
+  reason: string;
   timestamp: string;
 }
 
