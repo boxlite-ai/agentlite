@@ -856,6 +856,7 @@ class CodexQueryRunner<
     let newSessionId = sessionId;
     let messageCount = 0;
     let resultCount = 0;
+    let latestAssistantText: string | null = null;
 
     return new Promise<RuntimeQueryResult>((resolve, reject) => {
       const child = spawn('codex', args, {
@@ -910,14 +911,11 @@ class CodexQueryRunner<
           message.type === 'item.completed' &&
           message.item?.type === 'agent_message'
         ) {
-          resultCount++;
           const text =
             typeof message.item.text === 'string' ? message.item.text : null;
-          this.deps.writeOutput({
-            type: 'result',
-            result: text,
-            newSessionId,
-          });
+          if (text !== null) {
+            latestAssistantText = text;
+          }
         }
       });
 
@@ -943,6 +941,15 @@ class CodexQueryRunner<
             ),
           );
           return;
+        }
+
+        if (latestAssistantText !== null) {
+          resultCount++;
+          this.deps.writeOutput({
+            type: 'result',
+            result: latestAssistantText,
+            newSessionId,
+          });
         }
 
         this.deps.log(

@@ -145,6 +145,7 @@ const mockSpawnBox = vi.fn();
 vi.mock('./box-runtime.js', () => ({
   getRuntime: () => ({}),
   stopBox: vi.fn().mockResolvedValue(undefined),
+  unregisterActiveBox: vi.fn(),
   spawnBox: (...args: any[]) => mockSpawnBox(...args),
 }));
 
@@ -153,6 +154,7 @@ import {
   type ContainerEvent,
   type VolumeMount,
 } from './container-runner.js';
+import { unregisterActiveBox } from './box-runtime.js';
 import type { RuntimeConfig } from './runtime-config.js';
 import type { RegisteredGroup } from './types.js';
 
@@ -259,7 +261,6 @@ describe('container-runner with BoxLite', () => {
       () => {},
       onOutput,
     );
-
     // Settle the deep async setup chain (dynamic import → OneCLI →
     // buildBoxConfig → spawnBox → readStdout). Each await in the chain
     // needs a microtask flush; individual small advances ensure full drainage
@@ -394,6 +395,42 @@ describe('container-runner with BoxLite', () => {
         exitCode: 0,
       }),
     );
+  });
+
+  it('unregisters active boxes when output handling rejects', async () => {
+    const onOutput = vi.fn(async (event: ContainerEvent) => {
+      if (event.type === 'result') {
+        throw new Error('send failed');
+      }
+    });
+    const resultPromise = runContainerAgent(
+      testGroup,
+      testInput,
+      testRuntimeConfig,
+      () => {},
+      onOutput,
+    );
+    const resultAssertion =
+      expect(resultPromise).rejects.toThrow('send failed');
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    emitOutputToExec(mockExec, {
+      type: 'result',
+      result: 'Done',
+      newSessionId: 'session-456',
+    });
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    mockExec.closeStdout();
+    mockExec.closeStderr();
+    mockExec.resolveWait(0);
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    await resultAssertion;
+    expect(unregisterActiveBox).toHaveBeenCalledWith(expect.any(String));
   });
 
   it('timeout after active output without idle stays an error', async () => {

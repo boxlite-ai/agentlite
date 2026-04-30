@@ -18,7 +18,7 @@ import type { AgentBackendOptions, AgentBackendType } from './api/options.js';
 import type { RuntimeConfig } from './runtime-config.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
-import { spawnBox } from './box-runtime.js';
+import { spawnBox, unregisterActiveBox } from './box-runtime.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
 import { copyDirRecursive } from './utils.js';
@@ -564,396 +564,419 @@ export async function runContainerAgent(
   if ('status' in spawnResult) return spawnResult; // error
   const { box, execution } = spawnResult;
 
-  onProcess(containerName, containerName);
+  try {
+    onProcess(containerName, containerName);
 
-  // Stream stdout and stderr, parse output markers
-  let parseBuffer = '';
-  let newSessionId: string | undefined;
-  let outputChain = Promise.resolve();
-  let lastLifecycleState: ContainerState | null = null;
-  let stdout = '';
-  let stderr = '';
-  let stdoutTruncated = false;
-  let stderrTruncated = false;
+    // Stream stdout and stderr, parse output markers
+    let parseBuffer = '';
+    let newSessionId: string | undefined;
+    let outputChain = Promise.resolve();
+    let outputChainError: unknown;
+    let lastLifecycleState: ContainerState | null = null;
+    let stdout = '';
+    let stderr = '';
+    let stdoutTruncated = false;
+    let stderrTruncated = false;
 
-  // Timeout handling
-  let timedOut = false;
-  const configTimeout = group.containerConfig?.timeout || rc.containerTimeout;
-  const timeoutMs = Math.max(configTimeout, rc.idleTimeout + 30_000);
+    // Timeout handling
+    let timedOut = false;
+    const configTimeout = group.containerConfig?.timeout || rc.containerTimeout;
+    const timeoutMs = Math.max(configTimeout, rc.idleTimeout + 30_000);
 
-  let timeoutHandle: ReturnType<typeof setTimeout>;
-  const killOnTimeout = async () => {
-    timedOut = true;
-    logger.error({ group: group.name, containerName }, 'Box timeout, stopping');
-    try {
-      await execution.kill();
-    } catch {
-      /* ignore */
-    }
-    try {
-      await box.stop();
-    } catch {
-      /* ignore */
-    }
-  };
-  timeoutHandle = setTimeout(killOnTimeout, timeoutMs);
-
-  const resetTimeout = () => {
-    clearTimeout(timeoutHandle);
+    let timeoutHandle: ReturnType<typeof setTimeout>;
+    const killOnTimeout = async () => {
+      timedOut = true;
+      logger.error(
+        { group: group.name, containerName },
+        'Box timeout, stopping',
+      );
+      try {
+        await execution.kill();
+      } catch {
+        /* ignore */
+      }
+      try {
+        await box.stop();
+      } catch {
+        /* ignore */
+      }
+    };
     timeoutHandle = setTimeout(killOnTimeout, timeoutMs);
-  };
 
-  // Read stdout line-by-line via BoxLite's streaming API
-  const readStdout = async () => {
-    try {
-      const stdoutStream = await execution.stdout();
-      while (true) {
-        const line = await stdoutStream.next();
-        if (line === null) break;
+    const resetTimeout = () => {
+      clearTimeout(timeoutHandle);
+      timeoutHandle = setTimeout(killOnTimeout, timeoutMs);
+    };
+    const enqueueOutput = (event: ContainerEvent): void => {
+      if (!onOutput) return;
+      outputChain = outputChain
+        .then(async () => {
+          if (outputChainError !== undefined) return;
+          await onOutput(event);
+        })
+        .catch((err: unknown) => {
+          outputChainError ??= err;
+        });
+    };
+    const waitForOutputChain = async (): Promise<void> => {
+      await outputChain;
+      if (outputChainError !== undefined) {
+        throw outputChainError;
+      }
+    };
 
-        // Accumulate for logging
-        if (!stdoutTruncated) {
-          const remaining = rc.containerMaxOutputSize - stdout.length;
-          if (line.length > remaining) {
-            stdout += line.slice(0, remaining);
-            stdoutTruncated = true;
-            logger.warn(
-              { group: group.name, size: stdout.length },
-              'Box stdout truncated due to size limit',
-            );
-          } else {
-            stdout += line;
-          }
-        }
+    // Read stdout line-by-line via BoxLite's streaming API
+    const readStdout = async () => {
+      try {
+        const stdoutStream = await execution.stdout();
+        while (true) {
+          const line = await stdoutStream.next();
+          if (line === null) break;
 
-        // Parse output markers (same logic as before, adapted for line-by-line)
-        if (onOutput) {
-          parseBuffer += line;
-          let startIdx: number;
-          while ((startIdx = parseBuffer.indexOf(OUTPUT_START_MARKER)) !== -1) {
-            const endIdx = parseBuffer.indexOf(OUTPUT_END_MARKER, startIdx);
-            if (endIdx === -1) break; // Incomplete pair, wait for more data
-
-            const jsonStr = parseBuffer
-              .slice(startIdx + OUTPUT_START_MARKER.length, endIdx)
-              .trim();
-            parseBuffer = parseBuffer.slice(endIdx + OUTPUT_END_MARKER.length);
-
-            try {
-              const parsed: ContainerEvent = JSON.parse(jsonStr);
-              if (
-                (parsed.type === 'state' ||
-                  parsed.type === 'result' ||
-                  parsed.type === 'error') &&
-                parsed.newSessionId
-              ) {
-                newSessionId = parsed.newSessionId;
-              }
-              if (parsed.type === 'state') {
-                lastLifecycleState = parsed.state;
-              }
-              // Activity detected — reset the hard timeout
-              resetTimeout();
-              // Call onOutput for all structured stream events.
-              outputChain = outputChain.then(() => onOutput(parsed));
-            } catch (err) {
+          // Accumulate for logging
+          if (!stdoutTruncated) {
+            const remaining = rc.containerMaxOutputSize - stdout.length;
+            if (line.length > remaining) {
+              stdout += line.slice(0, remaining);
+              stdoutTruncated = true;
               logger.warn(
-                { group: group.name, error: err },
-                'Failed to parse streamed output chunk',
+                { group: group.name, size: stdout.length },
+                'Box stdout truncated due to size limit',
               );
+            } else {
+              stdout += line;
+            }
+          }
+
+          // Parse output markers (same logic as before, adapted for line-by-line)
+          if (onOutput) {
+            parseBuffer += line;
+            let startIdx: number;
+            while (
+              (startIdx = parseBuffer.indexOf(OUTPUT_START_MARKER)) !== -1
+            ) {
+              const endIdx = parseBuffer.indexOf(OUTPUT_END_MARKER, startIdx);
+              if (endIdx === -1) break; // Incomplete pair, wait for more data
+
+              const jsonStr = parseBuffer
+                .slice(startIdx + OUTPUT_START_MARKER.length, endIdx)
+                .trim();
+              parseBuffer = parseBuffer.slice(
+                endIdx + OUTPUT_END_MARKER.length,
+              );
+
+              try {
+                const parsed: ContainerEvent = JSON.parse(jsonStr);
+                if (
+                  (parsed.type === 'state' ||
+                    parsed.type === 'result' ||
+                    parsed.type === 'error') &&
+                  parsed.newSessionId
+                ) {
+                  newSessionId = parsed.newSessionId;
+                }
+                if (parsed.type === 'state') {
+                  lastLifecycleState = parsed.state;
+                }
+                // Activity detected — reset the hard timeout
+                resetTimeout();
+                // Call onOutput for all structured stream events.
+                enqueueOutput(parsed);
+              } catch (err) {
+                logger.warn(
+                  { group: group.name, error: err },
+                  'Failed to parse streamed output chunk',
+                );
+              }
             }
           }
         }
+      } catch {
+        // Stream ended or error
       }
-    } catch {
-      // Stream ended or error
-    }
-  };
-
-  // Read stderr line-by-line for logging
-  const readStderr = async () => {
-    try {
-      const stderrStream = await execution.stderr();
-      while (true) {
-        const line = await stderrStream.next();
-        if (line === null) break;
-
-        const trimmed = line.trim();
-        if (trimmed) logger.debug({ container: group.folder }, trimmed);
-
-        // Don't reset timeout on stderr — SDK writes debug logs continuously.
-        // Timeout only resets on actual output (OUTPUT_MARKER in stdout).
-        if (stderrTruncated) continue;
-        const remaining = rc.containerMaxOutputSize - stderr.length;
-        if (line.length > remaining) {
-          stderr += line.slice(0, remaining);
-          stderrTruncated = true;
-          logger.warn(
-            { group: group.name, size: stderr.length },
-            'Box stderr truncated due to size limit',
-          );
-        } else {
-          stderr += line;
-        }
-      }
-    } catch {
-      // Stream ended or error
-    }
-  };
-
-  // Run stdout/stderr readers and wait for completion in parallel
-  const [, , execResult] = await Promise.all([
-    readStdout(),
-    readStderr(),
-    execution.wait().catch((err: unknown) => {
-      logger.error(
-        { group: group.name, containerName, error: err },
-        'Box wait error',
-      );
-      return { exitCode: 1, errorMessage: String(err) };
-    }),
-  ]);
-
-  clearTimeout(timeoutHandle);
-  const duration = Date.now() - startTime;
-  const code = execResult.exitCode;
-
-  if (timedOut) {
-    if (onOutput) {
-      outputChain = outputChain.then(() =>
-        onOutput({
-          type: 'state',
-          state: 'stopped',
-          newSessionId,
-          reason: lastLifecycleState === 'idle' ? 'idle_timeout' : 'timeout',
-          exitCode: code,
-        }),
-      );
-    }
-
-    const ts = new Date().toISOString().replace(/[:.]/g, '-');
-    const timeoutLog = path.join(logsDir, `container-${ts}.log`);
-    fs.writeFileSync(
-      timeoutLog,
-      [
-        `=== Box Run Log (TIMEOUT) ===`,
-        `Timestamp: ${new Date().toISOString()}`,
-        `Group: ${group.name}`,
-        `Box: ${containerName}`,
-        `Duration: ${duration}ms`,
-        `Exit Code: ${code}`,
-        `Last Lifecycle State: ${lastLifecycleState ?? 'none'}`,
-      ].join('\n'),
-    );
-
-    // Timeout after an explicit idle signal = idle cleanup, not failure.
-    if (lastLifecycleState === 'idle') {
-      logger.info(
-        { group: group.name, containerName, duration, code },
-        'Box timed out after idle (idle cleanup)',
-      );
-      await outputChain;
-      return { status: 'success', result: null, newSessionId };
-    }
-
-    logger.error(
-      { group: group.name, containerName, duration, code },
-      'Box timed out before reaching idle',
-    );
-    await outputChain;
-    return {
-      status: 'error',
-      result: null,
-      error: `Box timed out after ${configTimeout}ms`,
     };
-  }
 
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const logFile = path.join(logsDir, `container-${timestamp}.log`);
-  const isVerbose =
-    process.env.LOG_LEVEL === 'debug' || process.env.LOG_LEVEL === 'trace';
+    // Read stderr line-by-line for logging
+    const readStderr = async () => {
+      try {
+        const stderrStream = await execution.stderr();
+        while (true) {
+          const line = await stderrStream.next();
+          if (line === null) break;
 
-  const logLines = [
-    `=== Box Run Log ===`,
-    `Timestamp: ${new Date().toISOString()}`,
-    `Group: ${group.name}`,
-    `IsMain: ${input.isMain}`,
-    `Duration: ${duration}ms`,
-    `Exit Code: ${code}`,
-    `Stdout Truncated: ${stdoutTruncated}`,
-    `Stderr Truncated: ${stderrTruncated}`,
-    ``,
-  ];
+          const trimmed = line.trim();
+          if (trimmed) logger.debug({ container: group.folder }, trimmed);
 
-  const isError = code !== 0;
+          // Don't reset timeout on stderr — SDK writes debug logs continuously.
+          // Timeout only resets on actual output (OUTPUT_MARKER in stdout).
+          if (stderrTruncated) continue;
+          const remaining = rc.containerMaxOutputSize - stderr.length;
+          if (line.length > remaining) {
+            stderr += line.slice(0, remaining);
+            stderrTruncated = true;
+            logger.warn(
+              { group: group.name, size: stderr.length },
+              'Box stderr truncated due to size limit',
+            );
+          } else {
+            stderr += line;
+          }
+        }
+      } catch {
+        // Stream ended or error
+      }
+    };
 
-  if (isVerbose || isError) {
-    // On error, log input metadata only — not the full prompt.
-    // Full input is only included at verbose level to avoid
-    // persisting user conversation content on every non-zero exit.
-    if (isVerbose) {
-      logLines.push(`=== Input ===`, JSON.stringify(input, null, 2), ``);
+    // Run stdout/stderr readers and wait for completion in parallel
+    const [, , execResult] = await Promise.all([
+      readStdout(),
+      readStderr(),
+      execution.wait().catch((err: unknown) => {
+        logger.error(
+          { group: group.name, containerName, error: err },
+          'Box wait error',
+        );
+        return { exitCode: 1, errorMessage: String(err) };
+      }),
+    ]);
+
+    clearTimeout(timeoutHandle);
+    const duration = Date.now() - startTime;
+    const code = execResult.exitCode;
+
+    if (timedOut) {
+      enqueueOutput({
+        type: 'state',
+        state: 'stopped',
+        newSessionId,
+        reason: lastLifecycleState === 'idle' ? 'idle_timeout' : 'timeout',
+        exitCode: code,
+      });
+
+      const ts = new Date().toISOString().replace(/[:.]/g, '-');
+      const timeoutLog = path.join(logsDir, `container-${ts}.log`);
+      fs.writeFileSync(
+        timeoutLog,
+        [
+          `=== Box Run Log (TIMEOUT) ===`,
+          `Timestamp: ${new Date().toISOString()}`,
+          `Group: ${group.name}`,
+          `Box: ${containerName}`,
+          `Duration: ${duration}ms`,
+          `Exit Code: ${code}`,
+          `Last Lifecycle State: ${lastLifecycleState ?? 'none'}`,
+        ].join('\n'),
+      );
+
+      // Timeout after an explicit idle signal = idle cleanup, not failure.
+      if (lastLifecycleState === 'idle') {
+        logger.info(
+          { group: group.name, containerName, duration, code },
+          'Box timed out after idle (idle cleanup)',
+        );
+        await waitForOutputChain();
+        return { status: 'success', result: null, newSessionId };
+      }
+
+      logger.error(
+        { group: group.name, containerName, duration, code },
+        'Box timed out before reaching idle',
+      );
+      await waitForOutputChain();
+      return {
+        status: 'error',
+        result: null,
+        error: `Box timed out after ${configTimeout}ms`,
+      };
+    }
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const logFile = path.join(logsDir, `container-${timestamp}.log`);
+    const isVerbose =
+      process.env.LOG_LEVEL === 'debug' || process.env.LOG_LEVEL === 'trace';
+
+    const logLines = [
+      `=== Box Run Log ===`,
+      `Timestamp: ${new Date().toISOString()}`,
+      `Group: ${group.name}`,
+      `IsMain: ${input.isMain}`,
+      `Duration: ${duration}ms`,
+      `Exit Code: ${code}`,
+      `Stdout Truncated: ${stdoutTruncated}`,
+      `Stderr Truncated: ${stderrTruncated}`,
+      ``,
+    ];
+
+    const isError = code !== 0;
+
+    if (isVerbose || isError) {
+      // On error, log input metadata only — not the full prompt.
+      // Full input is only included at verbose level to avoid
+      // persisting user conversation content on every non-zero exit.
+      if (isVerbose) {
+        logLines.push(`=== Input ===`, JSON.stringify(input, null, 2), ``);
+      } else {
+        logLines.push(
+          `=== Input Summary ===`,
+          `Prompt length: ${input.prompt.length} chars`,
+          `Session ID: ${input.sessionId || 'new'}`,
+          ``,
+        );
+      }
+      logLines.push(
+        `=== Box Options ===`,
+        JSON.stringify(boxOptions, null, 2),
+        ``,
+        `=== Mounts ===`,
+        mounts
+          .map(
+            (m) =>
+              `${m.hostPath} -> ${m.containerPath}${m.readonly ? ' (ro)' : ''}`,
+          )
+          .join('\n'),
+        ``,
+        `=== Stderr${stderrTruncated ? ' (TRUNCATED)' : ''} ===`,
+        stderr,
+        ``,
+        `=== Stdout${stdoutTruncated ? ' (TRUNCATED)' : ''} ===`,
+        stdout,
+      );
     } else {
       logLines.push(
         `=== Input Summary ===`,
         `Prompt length: ${input.prompt.length} chars`,
         `Session ID: ${input.sessionId || 'new'}`,
         ``,
+        `=== Mounts ===`,
+        mounts
+          .map((m) => `${m.containerPath}${m.readonly ? ' (ro)' : ''}`)
+          .join('\n'),
+        ``,
       );
     }
-    logLines.push(
-      `=== Box Options ===`,
-      JSON.stringify(boxOptions, null, 2),
-      ``,
-      `=== Mounts ===`,
-      mounts
-        .map(
-          (m) =>
-            `${m.hostPath} -> ${m.containerPath}${m.readonly ? ' (ro)' : ''}`,
-        )
-        .join('\n'),
-      ``,
-      `=== Stderr${stderrTruncated ? ' (TRUNCATED)' : ''} ===`,
-      stderr,
-      ``,
-      `=== Stdout${stdoutTruncated ? ' (TRUNCATED)' : ''} ===`,
-      stdout,
-    );
-  } else {
-    logLines.push(
-      `=== Input Summary ===`,
-      `Prompt length: ${input.prompt.length} chars`,
-      `Session ID: ${input.sessionId || 'new'}`,
-      ``,
-      `=== Mounts ===`,
-      mounts
-        .map((m) => `${m.containerPath}${m.readonly ? ' (ro)' : ''}`)
-        .join('\n'),
-      ``,
-    );
-  }
 
-  fs.writeFileSync(logFile, logLines.join('\n'));
-  logger.debug({ logFile, verbose: isVerbose }, 'Box log written');
+    fs.writeFileSync(logFile, logLines.join('\n'));
+    logger.debug({ logFile, verbose: isVerbose }, 'Box log written');
 
-  if (onOutput) {
-    outputChain = outputChain.then(() =>
-      onOutput({
-        type: 'state',
-        state: 'stopped',
-        newSessionId,
-        reason: code === 0 ? 'exit' : 'error_exit',
-        exitCode: code,
-      }),
-    );
-  }
+    enqueueOutput({
+      type: 'state',
+      state: 'stopped',
+      newSessionId,
+      reason: code === 0 ? 'exit' : 'error_exit',
+      exitCode: code,
+    });
 
-  if (code !== 0) {
-    await outputChain;
-    logger.error(
-      {
-        group: group.name,
-        code,
-        duration,
-        stderr,
-        stdout,
-        logFile,
-      },
-      'Box exited with error',
-    );
+    if (code !== 0) {
+      await waitForOutputChain();
+      logger.error(
+        {
+          group: group.name,
+          code,
+          duration,
+          stderr,
+          stdout,
+          logFile,
+        },
+        'Box exited with error',
+      );
 
-    return {
-      status: 'error',
-      result: null,
-      error: `Box exited with code ${code}: ${stderr.slice(-200)}`,
-    };
-  }
-
-  // Streaming mode: wait for output chain to settle, return completion marker
-  if (onOutput) {
-    await outputChain;
-    logger.info(
-      { group: group.name, duration, newSessionId },
-      'Box completed (streaming mode)',
-    );
-    return { status: 'success', result: null, newSessionId };
-  }
-
-  // Legacy mode: parse the last output marker pair from accumulated stdout
-  try {
-    const events: ContainerEvent[] = [];
-    let searchIdx = 0;
-    while (true) {
-      const startIdx = stdout.indexOf(OUTPUT_START_MARKER, searchIdx);
-      if (startIdx === -1) break;
-      const endIdx = stdout.indexOf(OUTPUT_END_MARKER, startIdx);
-      if (endIdx === -1) break;
-      const jsonLine = stdout
-        .slice(startIdx + OUTPUT_START_MARKER.length, endIdx)
-        .trim();
-      searchIdx = endIdx + OUTPUT_END_MARKER.length;
-
-      if (!jsonLine) continue;
-
-      const event = JSON.parse(jsonLine) as ContainerEvent;
-      events.push(event);
-      if (
-        (event.type === 'state' ||
-          event.type === 'result' ||
-          event.type === 'error') &&
-        event.newSessionId
-      ) {
-        newSessionId = event.newSessionId;
-      }
-    }
-
-    const lastError = [...events]
-      .reverse()
-      .find((event): event is ContainerErrorEvent => event.type === 'error');
-    if (lastError) {
       return {
         status: 'error',
         result: null,
-        newSessionId,
-        error: lastError.error,
+        error: `Box exited with code ${code}: ${stderr.slice(-200)}`,
       };
     }
 
-    const lastResult = [...events]
-      .reverse()
-      .find((event): event is ContainerResultEvent => event.type === 'result');
+    // Streaming mode: wait for output chain to settle, return completion marker
+    if (onOutput) {
+      await waitForOutputChain();
+      logger.info(
+        { group: group.name, duration, newSessionId },
+        'Box completed (streaming mode)',
+      );
+      return { status: 'success', result: null, newSessionId };
+    }
 
-    logger.info(
-      {
-        group: group.name,
-        duration,
+    // Legacy mode: parse the last output marker pair from accumulated stdout
+    try {
+      const events: ContainerEvent[] = [];
+      let searchIdx = 0;
+      while (true) {
+        const startIdx = stdout.indexOf(OUTPUT_START_MARKER, searchIdx);
+        if (startIdx === -1) break;
+        const endIdx = stdout.indexOf(OUTPUT_END_MARKER, startIdx);
+        if (endIdx === -1) break;
+        const jsonLine = stdout
+          .slice(startIdx + OUTPUT_START_MARKER.length, endIdx)
+          .trim();
+        searchIdx = endIdx + OUTPUT_END_MARKER.length;
+
+        if (!jsonLine) continue;
+
+        const event = JSON.parse(jsonLine) as ContainerEvent;
+        events.push(event);
+        if (
+          (event.type === 'state' ||
+            event.type === 'result' ||
+            event.type === 'error') &&
+          event.newSessionId
+        ) {
+          newSessionId = event.newSessionId;
+        }
+      }
+
+      const lastError = [...events]
+        .reverse()
+        .find((event): event is ContainerErrorEvent => event.type === 'error');
+      if (lastError) {
+        return {
+          status: 'error',
+          result: null,
+          newSessionId,
+          error: lastError.error,
+        };
+      }
+
+      const lastResult = [...events]
+        .reverse()
+        .find(
+          (event): event is ContainerResultEvent => event.type === 'result',
+        );
+
+      logger.info(
+        {
+          group: group.name,
+          duration,
+          status: 'success',
+          hasResult: !!lastResult?.result,
+        },
+        'Box completed',
+      );
+
+      return {
         status: 'success',
-        hasResult: !!lastResult?.result,
-      },
-      'Box completed',
-    );
+        result: lastResult?.result ?? null,
+        newSessionId,
+      };
+    } catch (err) {
+      logger.error(
+        {
+          group: group.name,
+          stdout,
+          stderr,
+          error: err,
+        },
+        'Failed to parse box output',
+      );
 
-    return {
-      status: 'success',
-      result: lastResult?.result ?? null,
-      newSessionId,
-    };
-  } catch (err) {
-    logger.error(
-      {
-        group: group.name,
-        stdout,
-        stderr,
-        error: err,
-      },
-      'Failed to parse box output',
-    );
-
-    return {
-      status: 'error',
-      result: null,
-      error: `Failed to parse box output: ${err instanceof Error ? err.message : String(err)}`,
-    };
+      return {
+        status: 'error',
+        result: null,
+        error: `Failed to parse box output: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+  } finally {
+    unregisterActiveBox(containerName);
   }
 }
 

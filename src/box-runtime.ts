@@ -6,6 +6,8 @@
 
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
+import { execFileSync } from 'node:child_process';
 
 import { JsBoxlite } from '@boxlite-ai/boxlite';
 
@@ -16,6 +18,24 @@ type BoxliteRuntime = InstanceType<typeof JsBoxlite>;
 
 let runtime: BoxliteRuntime | null = null;
 let _homeDir: string | undefined;
+
+const ACTIVE_BOX_HEARTBEAT_MS = 5_000;
+const ACTIVE_BOX_STALE_MS = 30_000;
+const PROCESS_STARTED_AT_MS = Math.floor(Date.now() - process.uptime() * 1000);
+const PROCESS_BOOT_ID = `${process.pid}:${PROCESS_STARTED_AT_MS}`;
+
+interface ActiveBoxRecord {
+  name: string;
+  pid: number;
+  bootId: string;
+  startedAt: string;
+  updatedAt: string;
+}
+
+const activeBoxes = new Map<
+  string,
+  { interval: ReturnType<typeof setInterval>; recordPath: string }
+>();
 
 /** Set the BoxLite home directory. Must be called before getRuntime(). */
 export function setBoxliteHome(homeDir: string): void {
@@ -30,6 +50,174 @@ export function getRuntime(): BoxliteRuntime {
       : JsBoxlite.withDefaultConfig();
   }
   return runtime;
+}
+
+function activeBoxesDir(): string {
+  return path.join(
+    _homeDir ?? path.join(os.tmpdir(), 'agentlite-boxlite'),
+    'agentlite-active-boxes',
+  );
+}
+
+function activeBoxRecordPath(name: string): string {
+  const safeName = name.replace(/[^a-zA-Z0-9_.-]/g, '_');
+  return path.join(activeBoxesDir(), `${safeName}.json`);
+}
+
+function writeActiveBoxRecord(
+  recordPath: string,
+  record: ActiveBoxRecord,
+): void {
+  const recordDir = path.dirname(recordPath);
+  fs.mkdirSync(recordDir, { recursive: true });
+  const tmpPath = path.join(
+    recordDir,
+    `.${path.basename(recordPath)}.${process.pid}.${Date.now()}.${Math.random()
+      .toString(36)
+      .slice(2)}.tmp`,
+  );
+  try {
+    fs.writeFileSync(
+      tmpPath,
+      JSON.stringify(
+        { ...record, updatedAt: new Date().toISOString() },
+        null,
+        2,
+      ),
+    );
+    fs.renameSync(tmpPath, recordPath);
+  } catch (err) {
+    try {
+      fs.unlinkSync(tmpPath);
+    } catch {
+      /* already removed */
+    }
+    throw err;
+  }
+}
+
+function readActiveBoxRecord(name: string): ActiveBoxRecord | null {
+  try {
+    const raw = fs.readFileSync(activeBoxRecordPath(name), 'utf-8');
+    const parsed = JSON.parse(raw) as Partial<ActiveBoxRecord>;
+    if (
+      parsed.name !== name ||
+      typeof parsed.pid !== 'number' ||
+      typeof parsed.bootId !== 'string' ||
+      typeof parsed.updatedAt !== 'string'
+    ) {
+      return null;
+    }
+    return parsed as ActiveBoxRecord;
+  } catch {
+    return null;
+  }
+}
+
+function isPidAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+function parseBootId(
+  bootId: string,
+): { pid: number; startedAtMs: number } | null {
+  const [pidText, startedAtText] = bootId.split(':');
+  const pid = Number(pidText);
+  const startedAtMs = Number(startedAtText);
+  if (
+    !Number.isInteger(pid) ||
+    pid <= 0 ||
+    !Number.isFinite(startedAtMs) ||
+    startedAtMs <= 0
+  ) {
+    return null;
+  }
+  return { pid, startedAtMs };
+}
+
+function getProcessStartedAtMs(pid: number): number | null {
+  if (pid === process.pid) return PROCESS_STARTED_AT_MS;
+  try {
+    const startedAt = execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], {
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    if (!startedAt) return null;
+    const parsed = Date.parse(startedAt);
+    return Number.isFinite(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function hasMatchingBootId(record: ActiveBoxRecord): boolean {
+  const boot = parseBootId(record.bootId);
+  if (!boot || boot.pid !== record.pid) return false;
+
+  const startedAtMs = getProcessStartedAtMs(record.pid);
+  if (startedAtMs === null) return false;
+
+  return Math.abs(startedAtMs - boot.startedAtMs) <= 2_000;
+}
+
+function hasLiveOwner(name: string): boolean {
+  if (activeBoxes.has(name)) return true;
+
+  const record = readActiveBoxRecord(name);
+  if (!record) return false;
+
+  const updatedAt = Date.parse(record.updatedAt);
+  if (!Number.isFinite(updatedAt)) return false;
+
+  const heartbeatFresh = Date.now() - updatedAt <= ACTIVE_BOX_STALE_MS;
+  return heartbeatFresh && isPidAlive(record.pid) && hasMatchingBootId(record);
+}
+
+export function registerActiveBox(name: string): void {
+  if (activeBoxes.has(name)) return;
+
+  const recordPath = activeBoxRecordPath(name);
+  const now = new Date().toISOString();
+  const record: ActiveBoxRecord = {
+    name,
+    pid: process.pid,
+    bootId: PROCESS_BOOT_ID,
+    startedAt: now,
+    updatedAt: now,
+  };
+
+  writeActiveBoxRecord(recordPath, record);
+  const interval = setInterval(() => {
+    try {
+      writeActiveBoxRecord(recordPath, record);
+    } catch (err) {
+      logger.warn({ err, name }, 'Failed to update active box heartbeat');
+    }
+  }, ACTIVE_BOX_HEARTBEAT_MS);
+  interval.unref?.();
+
+  activeBoxes.set(name, { interval, recordPath });
+}
+
+export function unregisterActiveBox(name: string): void {
+  const active = activeBoxes.get(name);
+  const recordPath = active?.recordPath ?? activeBoxRecordPath(name);
+
+  if (active) {
+    clearInterval(active.interval);
+    activeBoxes.delete(name);
+  }
+  try {
+    fs.unlinkSync(recordPath);
+  } catch {
+    /* already removed */
+  }
 }
 
 /** Ensure the BoxLite runtime is available. */
@@ -67,20 +255,31 @@ export function ensureRuntimeReady(): void {
 }
 
 /** Kill orphaned AgentLite boxes from previous runs. Scoped by agent id if provided. */
-export async function cleanupOrphans(agentId?: string): Promise<void> {
+export async function cleanupOrphans(
+  agentId?: string,
+  opts: { includeLive?: boolean } = {},
+): Promise<void> {
   try {
     const rt = getRuntime();
     const boxes = await rt.listInfo();
     const prefix = agentId ? `agentlite-${agentId}-` : 'agentlite-';
-    const orphans = boxes.filter(
+    const candidates = boxes.filter(
       (b: { name?: string; state: { running: boolean } }) =>
         b.name && b.name.startsWith(prefix) && b.state.running,
     );
+    const orphans = opts.includeLive
+      ? candidates
+      : candidates.filter(
+          (box: { name?: string }) => box.name && !hasLiveOwner(box.name),
+        );
     for (const box of orphans) {
+      const name = (box as { name: string }).name;
       try {
-        await rt.remove((box as { name: string }).name, true);
+        await rt.remove(name, true);
       } catch {
         /* already stopped */
+      } finally {
+        unregisterActiveBox(name);
       }
     }
     if (orphans.length > 0) {
@@ -91,6 +290,10 @@ export async function cleanupOrphans(agentId?: string): Promise<void> {
         },
         'Stopped orphaned boxes',
       );
+    }
+    const skipped = candidates.length - orphans.length;
+    if (skipped > 0) {
+      logger.debug({ count: skipped, prefix }, 'Skipped live AgentLite boxes');
     }
   } catch (err) {
     logger.warn({ err }, 'Failed to clean up orphaned boxes');
@@ -104,6 +307,8 @@ export async function stopBox(name: string): Promise<void> {
     await rt.remove(name, true);
   } catch {
     /* already stopped or doesn't exist */
+  } finally {
+    unregisterActiveBox(name);
   }
 }
 
@@ -171,11 +376,20 @@ export async function spawnBox(
       },
       containerName,
     );
+    registerActiveBox(containerName);
   } catch (err) {
     logger.error(
       { group: groupName, containerName, error: err },
       'Box creation failed',
     );
+    if (box) {
+      try {
+        await box.stop();
+      } catch {
+        /* ignore */
+      }
+      unregisterActiveBox(containerName);
+    }
     return {
       status: 'error',
       result: null,
@@ -211,6 +425,7 @@ export async function spawnBox(
     } catch {
       /* ignore */
     }
+    unregisterActiveBox(containerName);
     return {
       status: 'error',
       result: null,
@@ -238,6 +453,7 @@ export async function spawnBox(
     } catch {
       /* ignore */
     }
+    unregisterActiveBox(containerName);
     return {
       status: 'error',
       result: null,
